@@ -56,3 +56,59 @@ export async function analyzePlantWithGemini({
     return 'Ocorreu um erro de conexão com o assistente botânico. Verifique sua internet e tente novamente.';
   }
 }
+
+export interface IdentifiedPlantResult {
+  name: string;
+  species: string;
+  careTip: string;
+}
+
+export async function identifyPlantFromPhoto(
+  base64Image: string
+): Promise<IdentifiedPlantResult> {
+  const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+
+  // Fallback inteligente para testes sem chave de API
+  if (!apiKey) {
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    return {
+      name: 'Costela-de-Adão',
+      species: 'Monstera deliciosa',
+      careTip: 'Prefere luz indireta brilhante e rega quando o topo do solo secar.',
+    };
+  }
+
+  const prompt = `Analise a foto desta planta e responda EXCLUSIVAMENTE um JSON válido (sem crases markdown) no formato:
+{"name": "Nome popular em português", "species": "Nome científico", "careTip": "Uma dica curta de cuidado em 1 frase"}`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: 'image/jpeg', data: base64Image } },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+
+    const data = await response.json();
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const cleanedJson = rawText.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleanedJson) as IdentifiedPlantResult;
+  } catch {
+    return {
+      name: 'Planta Misteriosa',
+      species: 'Espécie botânica',
+      careTip: 'Mantenha em local iluminado e observe a umidade da terra.',
+    };
+  }
+}
