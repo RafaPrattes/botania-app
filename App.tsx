@@ -10,6 +10,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { PlantDetailScreen } from './src/screens/PlantDetailScreen';
 import { AIConsultScreen } from './src/screens/AIConsultScreen';
+import { usePlantStore } from './src/store/usePlantStore';
+import { OnboardingScreen } from './src/screens/OnboardingScreen';
+import { useLofiAudio } from './src/hooks/useLofiAudio';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'home' | 'ai' | 'detail'>(
@@ -21,6 +24,13 @@ export default function App() {
     setSelectedPlantId(plantId);
     setCurrentView('detail');
   };
+
+  const hasCompletedOnboarding = usePlantStore((s) => s.hasCompletedOnboarding);
+  const { isPlaying, toggleLofi } = useLofiAudio();
+
+    if (!hasCompletedOnboarding) {
+    return <OnboardingScreen />;
+    }
 
   return (
     <View style={styles.root}>
