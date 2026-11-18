@@ -2,18 +2,19 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
+  TouchableOpacity,
   StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { PlantDetailScreen } from './src/screens/PlantDetailScreen';
-
-type ScreenView = 'home' | 'detail' | 'ai';
+import { AIConsultScreen } from './src/screens/AIConsultScreen';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<ScreenView>('home');
+  const [currentView, setCurrentView] = useState<'home' | 'ai' | 'detail'>(
+    'home'
+  );
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
 
   const handleSelectPlant = (plantId: string) => {
@@ -25,39 +26,25 @@ export default function App() {
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Área Principal */}
+      {/* Área Principal de Conteúdo */}
       <View style={styles.content}>
         {currentView === 'home' && (
           <HomeScreen onSelectPlant={handleSelectPlant} />
         )}
 
-        {/* Placeholder temporário para a Etapa 4 (Prateleira Ghibli) */}
         {currentView === 'detail' && selectedPlantId && (
-      <PlantDetailScreen
-      plantId={selectedPlantId}
-      onBack={() => setCurrentView('home')}
-      />
+          <PlantDetailScreen
+            plantId={selectedPlantId}
+            onBack={() => setCurrentView('home')}
+          />
         )}
 
-
-        {/* Placeholder temporário para a Etapa 5 (Consultoria IA) */}
         {currentView === 'ai' && (
-          <View style={styles.placeholderContainer}>
-            <Text style={styles.placeholderTitle}>Consultoria Botânica IA</Text>
-            <Text style={styles.placeholderSubtitle}>
-              Vamos conectar o Gemini Multimodal na Etapa 5!
-            </Text>
-            <TouchableOpacity
-              style={styles.backBtn}
-              onPress={() => setCurrentView('home')}
-            >
-              <Text style={styles.backBtnText}>Voltar para A Estufa</Text>
-            </TouchableOpacity>
-          </View>
+          <AIConsultScreen onBack={() => setCurrentView('home')} />
         )}
       </View>
 
-      {/* Barra de Navegação Inferior (Tab Bar) */}
+      {/* Tab Bar (Bottom Navigation) - Oculta na tela de detalhes */}
       {currentView !== 'detail' && (
         <View style={styles.tabBar}>
           <TouchableOpacity
@@ -132,12 +119,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderTopWidth: 1,
     borderTopColor: '#E7E5E4',
-    paddingTop: 10,
-    paddingBottom: 24,
-    paddingHorizontal: 32,
+    paddingVertical: 10,
+    paddingBottom: 22,
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
@@ -146,50 +132,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: 80,
+    gap: 2,
   },
   tabIconWrapper: {
-    padding: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
     borderRadius: 12,
-    marginBottom: 2,
   },
   tabIconActive: {
     backgroundColor: 'rgba(92, 124, 104, 0.12)',
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     color: '#A8A29E',
   },
   tabLabelActive: {
     color: '#5C7C68',
-  },
-  placeholderContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    backgroundColor: '#F4EBD8',
-  },
-  placeholderTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#2C4A3B',
-    marginBottom: 8,
-  },
-  placeholderSubtitle: {
-    fontSize: 14,
-    color: '#78716C',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  backBtn: {
-    backgroundColor: '#5C7C68',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 16,
-  },
-  backBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
   },
 });
