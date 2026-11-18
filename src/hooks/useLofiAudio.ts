@@ -1,46 +1,34 @@
-import { useState, useEffect, useRef } from 'react';
-import { Audio } from 'expo-av';
+import { useEffect } from 'react';
+import {
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  setAudioModeAsync,
+} from 'expo-audio';
 
-// Stream livre de batidas Lo-Fi instrumentais suaves (ou substitua por require('../../assets/lofi.mp3'))
+// Stream livre de batidas Lo-Fi instrumentais suaves
 const LOFI_STREAM_URI =
   'https://cdn.pixabay.com/download/audio/2022/05/27/audio_1808fbf07a.mp3';
 
 export function useLofiAudio() {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const player = useAudioPlayer({ uri: LOFI_STREAM_URI });
+  const status = useAudioPlayerStatus(player);
 
   useEffect(() => {
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-      }
-    };
-  }, []);
+    player.loop = true;
+    player.volume = 0.35;
+    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+  }, [player]);
 
-  const toggleLofi = async () => {
-    try {
-      if (!soundRef.current) {
-        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: LOFI_STREAM_URI },
-          { shouldPlay: true, isLooping: true, volume: 0.35 }
-        );
-        soundRef.current = sound;
-        setIsPlaying(true);
-        return;
-      }
-
-      if (isPlaying) {
-        await soundRef.current.pauseAsync();
-        setIsPlaying(false);
-      } else {
-        await soundRef.current.playAsync();
-        setIsPlaying(true);
-      }
-    } catch {
-      setIsPlaying(false);
+  const toggleLofi = () => {
+    if (status.playing) {
+      player.pause();
+    } else {
+      player.play();
     }
   };
 
-  return { isPlaying, toggleLofi };
+  return {
+    isPlaying: status.playing,
+    toggleLofi,
+  };
 }

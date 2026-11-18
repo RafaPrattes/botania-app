@@ -88,9 +88,9 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
         <Svg width={dimension} height={dimension} viewBox="0 0 300 320">
           <Defs>
             <LinearGradient id="potTerracotta" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#E08260" />
-              <stop offset="55%" stopColor="#C46545" />
-              <stop offset="100%" stopColor="#94442B" />
+              <Stop offset="0%" stopColor="#E08260" />
+              <Stop offset="55%" stopColor="#C46545" />
+              <Stop offset="100%" stopColor="#94442B" />
             </LinearGradient>
             <LinearGradient id="jiboiaLeafGrad" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0%" stopColor={leafTopColor} />

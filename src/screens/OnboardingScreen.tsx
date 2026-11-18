@@ -86,7 +86,7 @@ export const OnboardingScreen: React.FC = () => {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>Passo {step} de 2 • Bem-vinda ao BotanIA</Text>
+          <Text style={styles.badgeText}>Passo {step} de 2 • Bem-vindo (a) ao BotanIA</Text>
         </View>
 
         {step === 1 ? (
