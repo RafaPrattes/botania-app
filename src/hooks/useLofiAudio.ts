@@ -1,37 +1,38 @@
-import { useEffect } from 'react';
-import {
-  useAudioPlayer,
-  useAudioPlayerStatus,
-  setAudioModeAsync,
-} from 'expo-audio';
+import { useState, useEffect } from 'react';
+import { Alert } from 'react-native';
+import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 
-// Stream público e estável no ExoPlayer (Android) e AVPlayer (iOS)
-const COZY_PIANO_STREAM =
-  'https://upload.wikimedia.org/wikipedia/commons/3/35/Erik_Satie_-_Gymnop%C3%A9die_No._1.ogg';
+// Stream AAC estável compatível com ExoPlayer (Android) e AVPlayer (iOS)
+const LOFI_STREAM_URL = 'https://streams.ilovemusic.de/iloveradio17.mp3';
 
 export function useLofiAudio() {
-  const player = useAudioPlayer({ uri: COZY_PIANO_STREAM });
-  const status = useAudioPlayerStatus(player);
+  const player = useAudioPlayer(LOFI_STREAM_URL);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
-    player.loop = true;
-    player.volume = 0.5;
     setAudioModeAsync({
       playsInSilentMode: true,
+      shouldPlayInBackground: false,
     }).catch(() => {});
-  }, [player]);
+  }, []);
 
   const toggleLofi = () => {
-    if (status.playing) {
-      player.pause();
-    } else {
-      player.play();
+    try {
+      if (isPlaying) {
+        player.pause();
+        setIsPlaying(false);
+      } else {
+        player.play();
+        setIsPlaying(true);
+      }
+    } catch {
+      Alert.alert(
+        'Áudio Lo-Fi',
+        'Não foi possível iniciar a rádio Lo-Fi agora. Verifique sua conexão com a internet.'
+      );
+      setIsPlaying(false);
     }
   };
 
-  return {
-    isPlaying: status.playing,
-    isBuffering: status.isBuffering,
-    toggleLofi,
-  };
+  return { isPlaying, toggleLofi };
 }

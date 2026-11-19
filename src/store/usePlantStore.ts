@@ -8,6 +8,7 @@ export interface Plant {
   species: string;
   category: PlantArchetype;
   location: string;
+  imageUrl?: string;
   hp: number;
   maxHp: number;
 }
@@ -50,44 +51,20 @@ const DEFAULT_TUTORIALS: Record<TutorialScreenKey, boolean> = {
   onboarding: false,
 };
 
-const STARTER_PLANTS: Plant[] = [
-  {
-    id: 'starter-1',
-    name: 'Jiboia da Janela',
-    species: 'Epipremnum aureum',
-    category: 'pendente',
-    location: 'Sala de Estar',
-    hp: 40,
-    maxHp: 100,
-  },
-  {
-    id: 'starter-2',
-    name: 'Suculenta Echeveria',
-    species: 'Echeveria elegans',
-    category: 'suculenta',
-    location: 'Varanda',
-    hp: 100,
-    maxHp: 100,
-  },
-];
-
 async function persistUserGarden(user: UserAccount | null, data: UserGardenData) {
   if (!user) return;
   try {
-    await AsyncStorage.setItem(
-      `botania-garden-${user.id}`,
-      JSON.stringify(data)
-    );
+    await AsyncStorage.setItem(`botania-garden-${user.id}`, JSON.stringify(data));
   } catch {
-    // Falha silenciosa de escrita
+    // Falha silenciosa
   }
 }
 
 export const usePlantStore = create<PlantStoreState>((set, get) => ({
   currentUser: null,
   activeView: 'login',
-  plants: STARTER_PLANTS,
-  xp: 100,
+  plants: [], // Zero plantas chumbadas: 100% alimentado pelo questionário!
+  xp: 0,
   seenTutorials: { ...DEFAULT_TUTORIALS },
 
   loginUser: async (name: string, email: string) => {
@@ -102,30 +79,31 @@ export const usePlantStore = create<PlantStoreState>((set, get) => ({
       const savedRaw = await AsyncStorage.getItem(`botania-garden-${user.id}`);
       if (savedRaw) {
         const saved: UserGardenData = JSON.parse(savedRaw);
+        const savedPlants = saved.plants || [];
         set({
           currentUser: user,
-          plants: saved.plants || STARTER_PLANTS,
-          xp: saved.xp ?? 100,
+          plants: savedPlants,
+          xp: saved.xp ?? 0,
           seenTutorials: { ...DEFAULT_TUTORIALS, ...(saved.seenTutorials || {}) },
-          activeView: 'app',
+          activeView: savedPlants.length > 0 ? 'app' : 'onboarding',
         });
         return;
       }
     } catch {
-      // Se não existir histórico, inicia novo jardim
+      // Novo usuário
     }
 
     const freshData: UserGardenData = {
-      plants: STARTER_PLANTS,
-      xp: 100,
+      plants: [],
+      xp: 0,
       seenTutorials: { ...DEFAULT_TUTORIALS },
     };
     await persistUserGarden(user, freshData);
 
     set({
       currentUser: user,
-      plants: freshData.plants,
-      xp: freshData.xp,
+      plants: [],
+      xp: 0,
       seenTutorials: freshData.seenTutorials,
       activeView: 'onboarding',
     });
@@ -134,6 +112,8 @@ export const usePlantStore = create<PlantStoreState>((set, get) => ({
   logoutUser: () => {
     set({
       currentUser: null,
+      plants: [],
+      xp: 0,
       activeView: 'login',
     });
   },
