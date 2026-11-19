@@ -12,6 +12,7 @@ export interface SpeciesSearchResult {
   scientificName: string;
   category: PlantArchetype;
   careSummary: string;
+  imageUrl?: string;
 }
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
@@ -28,6 +29,19 @@ export function inferPlantArchetype(text: string): PlantArchetype {
   return 'folhagem';
 }
 
+// Busca thumbnail botânica real na Wikipedia API (gratuita e sem chave) pelo nome científico
+async function fetchWikipediaPlantImage(scientificName: string): Promise<string | undefined> {
+  try {
+    const cleanTitle = encodeURIComponent(scientificName.trim().replace(/\s+/g, '_'));
+    const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${cleanTitle}`);
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return data?.thumbnail?.source || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function searchBotanicalSpecies(
   query: string
 ): Promise<SpeciesSearchResult[]> {
@@ -39,12 +53,11 @@ export async function searchBotanicalSpecies(
     return searchCache.get(cacheKey)!;
   }
 
-  // 1. Tenta busca inteligente via Gemini (retorna nomes populares em PT-BR + científico + arquétipo)
   if (GEMINI_API_KEY) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
       const prompt = `Você é um banco de dados botânico. O usuário pesquisou "${clean}".
-Retorne até 8 espécies reais de plantas domésticas correspondentes em JSON puro (sem markdown):
+Retorne até 6 espécies reais de plantas domésticas correspondentes em JSON puro:
 [
   {
     "popularName": "Nome popular em português",
@@ -71,29 +84,37 @@ Retorne até 8 espécies reais de plantas domésticas correspondentes em JSON pu
         const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
         const list = JSON.parse(raw);
         if (Array.isArray(list) && list.length > 0) {
-          const mapped: SpeciesSearchResult[] = list.map((item: any, idx: number) => ({
-            id: `gem-${cacheKey}-${idx}`,
-            popularName: item.popularName || clean,
-            scientificName: item.scientificName || 'Espécie botânica',
-            category: item.category || inferPlantArchetype(`${item.popularName} ${item.scientificName}`),
-            careSummary: item.careSummary || 'Luz indireta e rega moderada.',
-          }));
+          const mapped: SpeciesSearchResult[] = await Promise.all(
+            list.map(async (item: any, idx: number) => {
+              const sci = item.scientificName || 'Espécie botânica';
+              const img = await fetchWikipediaPlantImage(sci);
+              return {
+                id: `gem-${cacheKey}-${idx}`,
+                popularName: item.popularName || clean,
+                scientificName: sci,
+                category:
+                  item.category ||
+                  inferPlantArchetype(`${item.popularName} ${sci}`),
+                careSummary: item.careSummary || 'Luz indireta e rega moderada.',
+                imageUrl: img,
+              };
+            })
+          );
           searchCache.set(cacheKey, mapped);
           return mapped;
         }
       }
     } catch {
-      // Continua para a API pública Perenual se offline/sem cota
+      // Fallback para Perenual
     }
   }
 
-  // 2. Fallback para API Botânica Pública Perenual
   try {
     const url = `https://perenual.com/api/v2/species-list?key=${PERENUAL_KEY}&q=${encodeURIComponent(clean)}`;
     const res = await fetch(url);
     if (res.ok) {
       const json = await res.json();
-      const items = (json?.data || []).slice(0, 8).map((item: any) => {
+      const items: SpeciesSearchResult[] = (json?.data || []).slice(0, 6).map((item: any) => {
         const sci = Array.isArray(item.scientific_name)
           ? item.scientific_name[0]
           : item.scientific_name || '';
@@ -104,6 +125,7 @@ Retorne até 8 espécies reais de plantas domésticas correspondentes em JSON pu
           scientificName: sci,
           category: inferPlantArchetype(`${pop} ${sci}`),
           careSummary: `Rega: ${item.watering || 'Moderada'}`,
+          imageUrl: item.default_image?.regular_url || undefined,
         };
       });
       if (items.length > 0) {
@@ -112,7 +134,7 @@ Retorne até 8 espécies reais de plantas domésticas correspondentes em JSON pu
       }
     }
   } catch {
-    // Sem conexão
+    // Offline
   }
 
   return [];
