@@ -17,7 +17,9 @@ import { useLofiAudio } from './src/hooks/useLofiAudio';
 
 export default function App() {
   const hasCompletedOnboarding = usePlantStore(
-    (s) => s.hasCompletedOnboarding
+    (s) =>
+      (s as unknown as { hasCompletedOnboarding: boolean })
+        .hasCompletedOnboarding
   );
   const [currentView, setCurrentView] = useState<'home' | 'ai' | 'detail'>(
     'home'
@@ -57,6 +59,7 @@ export default function App() {
             <PlantDetailScreen
               plantId={selectedPlantId}
               onBack={() => setCurrentView('home')}
+              onSelectPlant={handleSelectPlant}
             />
           )}
         </View>

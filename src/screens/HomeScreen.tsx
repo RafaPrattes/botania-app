@@ -151,7 +151,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   ]}
                 >
                   <PlantIllustration
-                    plantID={plant.id}
                     category={plant.category}
                     species={plant.species}
                     isLowHp={isLowHp}
