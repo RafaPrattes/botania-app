@@ -184,7 +184,7 @@ export const OnboardingScreen: React.FC = () => {
             >
               {customName
                 ? `${customName} • ${customSpecies}`
-                : 'Pesquisar entre +55 espécies (ex: Bonsai, Cacto, Jiboia)...'}
+                : 'Pesquisar pelo nome popular ou científico...'}
             </Text>
           </View>
           <Ionicons name="chevron-down" size={20} color="#4A7C59" />

@@ -284,7 +284,7 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           )}
 
           <PlantIllustration
-            plantId={plant.id}
+            plantID={plant.id}
             species={plant.species}
             isLowHp={isLowHp}
             size="large"

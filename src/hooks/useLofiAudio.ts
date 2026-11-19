@@ -18,7 +18,6 @@ export function useLofiAudio() {
     player.volume = 0.5;
     setAudioModeAsync({
       playsInSilentMode: true,
-      shouldDuckAndroid: true,
     }).catch(() => {});
   }, [player]);
 

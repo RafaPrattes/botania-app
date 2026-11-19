@@ -13,6 +13,7 @@ import Svg, {
 import { PlantArchetype, inferPlantArchetype } from '../data/plantCatalog';
 
 interface PlantIllustrationProps {
+  plantID: string;
   category?: PlantArchetype;
   species?: string;
   isLowHp: boolean;
@@ -20,6 +21,7 @@ interface PlantIllustrationProps {
 }
 
 export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
+  plantID,
   category,
   species = '',
   isLowHp,
