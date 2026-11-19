@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { PlantArchetype, inferPlantArchetype } from '../data/plantCatalog';
+import { PlantArchetype, inferPlantArchetype } from '../services/plantSpeciesService';
 
 export interface Plant {
   id: string;
@@ -13,102 +12,196 @@ export interface Plant {
   maxHp: number;
 }
 
-interface PlantStoreState {
-  plants: Plant[];
-  xp: number;
-  hasCompletedOnboarding: boolean;
-  addPlant: (plant: Omit<Plant, 'id' | 'hp' | 'maxHp'>) => void;
-  removePlant: (id: string) => void;
-  waterPlant: (id: string) => void;
-  simulateDay: () => void;
-  completeOnboarding: () => void;
-  openHomeMenu: () => void;
+export interface UserAccount {
+  id: string;
+  name: string;
+  email: string;
 }
 
-const INITIAL_PLANTS: Plant[] = [
+export type TutorialScreenKey = 'home' | 'detail' | 'ai' | 'onboarding';
+
+interface UserGardenData {
+  plants: Plant[];
+  xp: number;
+  seenTutorials: Record<TutorialScreenKey, boolean>;
+}
+
+interface PlantStoreState {
+  currentUser: UserAccount | null;
+  activeView: 'login' | 'onboarding' | 'app';
+  plants: Plant[];
+  xp: number;
+  seenTutorials: Record<TutorialScreenKey, boolean>;
+
+  loginUser: (name: string, email: string) => Promise<void>;
+  logoutUser: () => void;
+  setActiveView: (view: 'login' | 'onboarding' | 'app') => void;
+
+  addPlant: (plant: Omit<Plant, 'id' | 'hp' | 'maxHp'>) => void;
+  waterPlant: (id: string) => void;
+  simulateDay: () => void;
+  dismissTutorial: (screen: TutorialScreenKey) => void;
+}
+
+const DEFAULT_TUTORIALS: Record<TutorialScreenKey, boolean> = {
+  home: false,
+  detail: false,
+  ai: false,
+  onboarding: false,
+};
+
+const STARTER_PLANTS: Plant[] = [
   {
-    id: '1',
-    name: 'Jiboia da Sala',
+    id: 'starter-1',
+    name: 'Jiboia da Janela',
     species: 'Epipremnum aureum',
     category: 'pendente',
     location: 'Sala de Estar',
-    hp: 30,
+    hp: 40,
     maxHp: 100,
   },
   {
-    id: '2',
+    id: 'starter-2',
     name: 'Suculenta Echeveria',
     species: 'Echeveria elegans',
     category: 'suculenta',
-    location: 'Janela da Cozinha',
-    hp: 100,
-    maxHp: 100,
-  },
-  {
-    id: '3',
-    name: 'Kalanchoe',
-    species: 'Kalanchoe blossfeldiana',
-    category: 'flor',
     location: 'Varanda',
-    hp: 60,
+    hp: 100,
     maxHp: 100,
   },
 ];
 
-export const usePlantStore = create<PlantStoreState>()(
-  persist(
-    (set) => ({
-      plants: INITIAL_PLANTS,
-      xp: 120,
-      hasCompletedOnboarding: false,
+async function persistUserGarden(user: UserAccount | null, data: UserGardenData) {
+  if (!user) return;
+  try {
+    await AsyncStorage.setItem(
+      `botania-garden-${user.id}`,
+      JSON.stringify(data)
+    );
+  } catch {
+    // Falha silenciosa de escrita
+  }
+}
 
-      addPlant: (newPlant) =>
-        set((state) => ({
-          plants: [
-            ...state.plants,
-            {
-              ...newPlant,
-              category:
-                newPlant.category ||
-                inferPlantArchetype(`${newPlant.name} ${newPlant.species}`),
-              id: Date.now().toString(),
-              hp: 80,
-              maxHp: 100,
-            },
-          ],
-          xp: state.xp + 25,
-        })),
+export const usePlantStore = create<PlantStoreState>((set, get) => ({
+  currentUser: null,
+  activeView: 'login',
+  plants: STARTER_PLANTS,
+  xp: 100,
+  seenTutorials: { ...DEFAULT_TUTORIALS },
 
-      removePlant: (id) =>
-        set((state) => ({
-          plants: state.plants.filter((p) => p.id !== id),
-        })),
+  loginUser: async (name: string, email: string) => {
+    const normalizedId = email.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const user: UserAccount = {
+      id: normalizedId,
+      name: name.trim() || 'Jardineira',
+      email: email.trim().toLowerCase(),
+    };
 
-      waterPlant: (id) =>
-        set((state) => ({
-          plants: state.plants.map((plant) =>
-            plant.id === id ? { ...plant, hp: plant.maxHp } : plant
-          ),
-          xp: state.xp + 10,
-        })),
-
-      simulateDay: () =>
-        set((state) => ({
-          plants: state.plants.map((plant) => ({
-            ...plant,
-            hp: Math.max(0, plant.hp - 20),
-          })),
-        })),
-
-      completeOnboarding: () => set({ hasCompletedOnboarding: true }),
-      openHomeMenu: () => set({ hasCompletedOnboarding: false }),
-    }),
-    {
-      name: 'botania-plant-storage-v3',
-      storage: createJSONStorage(() => AsyncStorage),
+    try {
+      const savedRaw = await AsyncStorage.getItem(`botania-garden-${user.id}`);
+      if (savedRaw) {
+        const saved: UserGardenData = JSON.parse(savedRaw);
+        set({
+          currentUser: user,
+          plants: saved.plants || STARTER_PLANTS,
+          xp: saved.xp ?? 100,
+          seenTutorials: { ...DEFAULT_TUTORIALS, ...(saved.seenTutorials || {}) },
+          activeView: 'app',
+        });
+        return;
+      }
+    } catch {
+      // Se não existir histórico, inicia novo jardim
     }
-  )
-);
+
+    const freshData: UserGardenData = {
+      plants: STARTER_PLANTS,
+      xp: 100,
+      seenTutorials: { ...DEFAULT_TUTORIALS },
+    };
+    await persistUserGarden(user, freshData);
+
+    set({
+      currentUser: user,
+      plants: freshData.plants,
+      xp: freshData.xp,
+      seenTutorials: freshData.seenTutorials,
+      activeView: 'onboarding',
+    });
+  },
+
+  logoutUser: () => {
+    set({
+      currentUser: null,
+      activeView: 'login',
+    });
+  },
+
+  setActiveView: (view) => set({ activeView: view }),
+
+  addPlant: (newPlant) => {
+    const state = get();
+    const updatedPlants: Plant[] = [
+      ...state.plants,
+      {
+        ...newPlant,
+        category:
+          newPlant.category ||
+          inferPlantArchetype(`${newPlant.name} ${newPlant.species}`),
+        id: Date.now().toString(),
+        hp: 80,
+        maxHp: 100,
+      },
+    ];
+    const updatedXp = state.xp + 25;
+    set({ plants: updatedPlants, xp: updatedXp });
+    persistUserGarden(state.currentUser, {
+      plants: updatedPlants,
+      xp: updatedXp,
+      seenTutorials: state.seenTutorials,
+    });
+  },
+
+  waterPlant: (id) => {
+    const state = get();
+    const updatedPlants = state.plants.map((p) =>
+      p.id === id ? { ...p, hp: p.maxHp } : p
+    );
+    const updatedXp = state.xp + 10;
+    set({ plants: updatedPlants, xp: updatedXp });
+    persistUserGarden(state.currentUser, {
+      plants: updatedPlants,
+      xp: updatedXp,
+      seenTutorials: state.seenTutorials,
+    });
+  },
+
+  simulateDay: () => {
+    const state = get();
+    const updatedPlants = state.plants.map((p) => ({
+      ...p,
+      hp: Math.max(0, p.hp - 20),
+    }));
+    set({ plants: updatedPlants });
+    persistUserGarden(state.currentUser, {
+      plants: updatedPlants,
+      xp: state.xp,
+      seenTutorials: state.seenTutorials,
+    });
+  },
+
+  dismissTutorial: (screen) => {
+    const state = get();
+    const updatedTutorials = { ...state.seenTutorials, [screen]: true };
+    set({ seenTutorials: updatedTutorials });
+    persistUserGarden(state.currentUser, {
+      plants: state.plants,
+      xp: state.xp,
+      seenTutorials: updatedTutorials,
+    });
+  },
+}));
 
 export const selectCurrentLevel = (state: PlantStoreState) =>
   Math.floor(state.xp / 100) + 1;

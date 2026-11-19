@@ -19,17 +19,18 @@ interface HomeScreenProps {
   onSelectPlant: (plantId: string) => void;
   isLofiPlaying: boolean;
   onToggleLofi: () => void;
+  onOpenHomeMenu?: () => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSelectPlant,
   isLofiPlaying,
   onToggleLofi,
+  onOpenHomeMenu = () => {},
 }) => {
   const plants = usePlantStore((s) => s.plants);
   const waterPlant = usePlantStore((s) => s.waterPlant);
   const simulateDay = usePlantStore((s) => s.simulateDay);
-  const openHomeMenu = usePlantStore((s) => s.openHomeMenu);
   const level = usePlantStore(selectCurrentLevel);
   const xpProgress = usePlantStore(selectXpProgress);
 
@@ -43,7 +44,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <View style={styles.topActionBar}>
           <TouchableOpacity
             style={styles.navPillBtn}
-            onPress={openHomeMenu}
+            onPress={onOpenHomeMenu}
             activeOpacity={0.8}
           >
             <Ionicons name="apps" size={16} color="#244233" />
@@ -76,7 +77,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
             <TouchableOpacity
               style={styles.addPlantPill}
-              onPress={openHomeMenu}
+              onPress={onOpenHomeMenu}
               activeOpacity={0.85}
             >
               <Ionicons name="add" size={18} color="#FFFFFF" />
