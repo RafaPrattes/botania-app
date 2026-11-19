@@ -9,19 +9,20 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from './src/store/usePlantStore';
+import { LoginScreen } from './src/screens/LoginScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { PlantDetailScreen } from './src/screens/PlantDetailScreen';
 import { AIConsultScreen } from './src/screens/AIConsultScreen';
 import { useLofiAudio } from './src/hooks/useLofiAudio';
+import { ScreenTutorialPopup } from './src/components/ScreenTutorialPopup';
 
 export default function App() {
-  const hasCompletedOnboarding = usePlantStore(
-    (s) =>
-      (s as unknown as { hasCompletedOnboarding: boolean })
-        .hasCompletedOnboarding
-  );
-  const [currentView, setCurrentView] = useState<'home' | 'ai' | 'detail'>(
+  const activeView = usePlantStore((s) => s.activeView);
+  const seenTutorials = usePlantStore((s) => s.seenTutorials);
+  const dismissTutorial = usePlantStore((s) => s.dismissTutorial);
+
+  const [currentTab, setCurrentTab] = useState<'home' | 'ai' | 'detail'>(
     'home'
   );
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
@@ -29,10 +30,19 @@ export default function App() {
 
   const handleSelectPlant = (plantId: string) => {
     setSelectedPlantId(plantId);
-    setCurrentView('detail');
+    setCurrentTab('detail');
   };
 
-  if (!hasCompletedOnboarding) {
+  if (activeView === 'login') {
+    return (
+      <SafeAreaProvider>
+        <StatusBar barStyle="dark-content" />
+        <LoginScreen />
+      </SafeAreaProvider>
+    );
+  }
+
+  if (activeView === 'onboarding') {
     return (
       <SafeAreaProvider>
         <StatusBar barStyle="dark-content" />
@@ -47,46 +57,86 @@ export default function App() {
         <StatusBar barStyle="light-content" />
 
         <View style={styles.content}>
-          {currentView === 'home' && (
-            <HomeScreen
-              onSelectPlant={handleSelectPlant}
-              isLofiPlaying={isPlaying}
-              onToggleLofi={toggleLofi}
-            />
+          {currentTab === 'home' && (
+            <>
+              <HomeScreen
+                onSelectPlant={handleSelectPlant}
+                isLofiPlaying={isPlaying}
+                onToggleLofi={toggleLofi}
+              />
+              <ScreenTutorialPopup
+                visible={!seenTutorials.home}
+                heading="Bem-vinda à sua Estufa 🏡"
+                onDismiss={() => dismissTutorial('home')}
+                steps={[
+                  {
+                    icon: 'leaf',
+                    title: 'Toque em uma planta',
+                    description:
+                      'Abre a prateleira ilustrada com janela dia/noite e ferramentas.',
+                  },
+                  {
+                    icon: 'musical-notes',
+                    title: 'Música Lo-Fi & Nova Planta',
+                    description:
+                      'Use a barra superior para ligar a trilha sonora ou adicionar mais plantas.',
+                  },
+                ]}
+              />
+            </>
           )}
-          {currentView === 'ai' && <AIConsultScreen />}
-          {currentView === 'detail' && selectedPlantId && (
+
+          {currentTab === 'ai' && (
+            <>
+              <AIConsultScreen />
+              <ScreenTutorialPopup
+                visible={!seenTutorials.ai}
+                heading="Especialista Botânico IA 🤖"
+                onDismiss={() => dismissTutorial('ai')}
+                steps={[
+                  {
+                    icon: 'camera',
+                    title: 'Envie uma foto ou dúvida',
+                    description:
+                      'Use a câmera ou galeria para diagnosticar folhas amareladas, pragas e rega.',
+                  },
+                ]}
+              />
+            </>
+          )}
+
+          {currentTab === 'detail' && selectedPlantId && (
             <PlantDetailScreen
               plantId={selectedPlantId}
-              onBack={() => setCurrentView('home')}
-              onSelectPlant={handleSelectPlant}
+              onSelectPlant={(id) => setSelectedPlantId(id)}
+              onBack={() => setCurrentTab('home')}
             />
           )}
         </View>
 
-        {currentView !== 'detail' && (
+        {currentTab !== 'detail' && (
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={styles.tabItem}
-              onPress={() => setCurrentView('home')}
+              onPress={() => setCurrentTab('home')}
               activeOpacity={0.75}
             >
               <View
                 style={[
                   styles.tabIconWrapper,
-                  currentView === 'home' && styles.tabIconActive,
+                  currentTab === 'home' && styles.tabIconActive,
                 ]}
               >
                 <Ionicons
-                  name={currentView === 'home' ? 'leaf' : 'leaf-outline'}
+                  name={currentTab === 'home' ? 'leaf' : 'leaf-outline'}
                   size={22}
-                  color={currentView === 'home' ? '#244233' : '#8E8980'}
+                  color={currentTab === 'home' ? '#244233' : '#8E8980'}
                 />
               </View>
               <Text
                 style={[
                   styles.tabLabel,
-                  currentView === 'home' && styles.tabLabelActive,
+                  currentTab === 'home' && styles.tabLabelActive,
                 ]}
               >
                 Estufa
@@ -95,27 +145,25 @@ export default function App() {
 
             <TouchableOpacity
               style={styles.tabItem}
-              onPress={() => setCurrentView('ai')}
+              onPress={() => setCurrentTab('ai')}
               activeOpacity={0.75}
             >
               <View
                 style={[
                   styles.tabIconWrapper,
-                  currentView === 'ai' && styles.tabIconActive,
+                  currentTab === 'ai' && styles.tabIconActive,
                 ]}
               >
                 <Ionicons
-                  name={
-                    currentView === 'ai' ? 'sparkles' : 'sparkles-outline'
-                  }
+                  name={currentTab === 'ai' ? 'sparkles' : 'sparkles-outline'}
                   size={22}
-                  color={currentView === 'ai' ? '#244233' : '#8E8980'}
+                  color={currentTab === 'ai' ? '#244233' : '#8E8980'}
                 />
               </View>
               <Text
                 style={[
                   styles.tabLabel,
-                  currentView === 'ai' && styles.tabLabelActive,
+                  currentTab === 'ai' && styles.tabLabelActive,
                 ]}
               >
                 IA Botânica

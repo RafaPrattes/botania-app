@@ -15,18 +15,22 @@ import {
 } from '../store/usePlantStore';
 import { PlantIllustration } from '../components/PlantIllustration';
 
+interface SetActiveView {
+  (view: 'onboarding'): void;
+}
+
 interface HomeScreenProps {
   onSelectPlant: (plantId: string) => void;
   isLofiPlaying: boolean;
   onToggleLofi: () => void;
-  onOpenHomeMenu?: () => void;
+  setActiveView?: SetActiveView;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSelectPlant,
   isLofiPlaying,
   onToggleLofi,
-  onOpenHomeMenu = () => {},
+  setActiveView = () => {},
 }) => {
   const plants = usePlantStore((s) => s.plants);
   const waterPlant = usePlantStore((s) => s.waterPlant);
@@ -44,7 +48,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <View style={styles.topActionBar}>
           <TouchableOpacity
             style={styles.navPillBtn}
-            onPress={onOpenHomeMenu}
+            onPress={() => setActiveView('onboarding')}
             activeOpacity={0.8}
           >
             <Ionicons name="apps" size={16} color="#244233" />
@@ -77,7 +81,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
             <TouchableOpacity
               style={styles.addPlantPill}
-              onPress={onOpenHomeMenu}
+              onPress={() => setActiveView('onboarding')}
               activeOpacity={0.85}
             >
               <Ionicons name="add" size={18} color="#FFFFFF" />

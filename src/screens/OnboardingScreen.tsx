@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,12 +16,13 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 import {
-  PLANT_CATALOG,
-  PlantCatalogItem,
+  searchBotanicalSpecies,
+  SpeciesSearchResult,
   PlantArchetype,
   inferPlantArchetype,
-} from '../data/plantCatalog';
+} from '../services/plantSpeciesService';
 import { identifyPlantFromPhoto } from '../services/geminiService';
+import { ScreenTutorialPopup } from '../components/ScreenTutorialPopup';
 
 const ROOM_OPTIONS = [
   'Sala de Estar',
@@ -32,12 +33,19 @@ const ROOM_OPTIONS = [
 ];
 
 export const OnboardingScreen: React.FC = () => {
-  const { plants, addPlant, completeOnboarding } = usePlantStore();
+  const {
+    currentUser,
+    plants,
+    addPlant,
+    setActiveView,
+    seenTutorials,
+    dismissTutorial,
+  } = usePlantStore();
 
-  const [selectedCatalogItem, setSelectedCatalogItem] =
-    useState<PlantCatalogItem | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SpeciesSearchResult[]>([]);
+  const [isSearchingApi, setIsSearchingApi] = useState(false);
 
   const [customName, setCustomName] = useState('');
   const [customSpecies, setCustomSpecies] = useState('');
@@ -48,22 +56,30 @@ export const OnboardingScreen: React.FC = () => {
   const [isIdentifying, setIsIdentifying] = useState(false);
   const [aiTip, setAiTip] = useState<string | null>(null);
 
-  const filteredPlants = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return PLANT_CATALOG;
-    return PLANT_CATALOG.filter(
-      (item) =>
-        item.popularName.toLowerCase().includes(q) ||
-        item.scientificName.toLowerCase().includes(q)
-    );
-  }, [searchQuery]);
+  // Busca dinâmica na API botânica com debounce de 450ms
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      return;
+    }
 
-  const handleSelectFromDropdown = (item: PlantCatalogItem) => {
-    setSelectedCatalogItem(item);
+    const timer = setTimeout(async () => {
+      setIsSearchingApi(true);
+      const results = await searchBotanicalSpecies(q);
+      setSearchResults(results);
+      setIsSearchingApi(false);
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, dropdownOpen]);
+
+  const handleSelectResult = (item: SpeciesSearchResult) => {
     setCustomName(item.popularName);
     setCustomSpecies(item.scientificName);
     setCustomCategory(item.category);
-    setAiTip(item.lightTip);
+    setAiTip(item.careSummary);
     setDropdownOpen(false);
     setSearchQuery('');
   };
@@ -74,7 +90,6 @@ export const OnboardingScreen: React.FC = () => {
     setAiTip(null);
     try {
       const identified = await identifyPlantFromPhoto(result.assets[0].base64);
-      setSelectedCatalogItem(null);
       setCustomName(identified.popularName);
       setCustomSpecies(identified.scientificName);
       setCustomCategory(identified.category);
@@ -84,7 +99,7 @@ export const OnboardingScreen: React.FC = () => {
         `Espécie: ${identified.popularName} (${identified.scientificName})\n\nDica: ${identified.careTip}`
       );
     } catch (err: any) {
-      Alert.alert('Atenção', err.message || 'Não foi possível identificar.');
+      Alert.alert('Não foi possível identificar', err.message);
     } finally {
       setIsIdentifying(false);
     }
@@ -93,10 +108,7 @@ export const OnboardingScreen: React.FC = () => {
   const handleOpenCamera = async () => {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert(
-        'Permissão necessária',
-        'Precisamos de acesso à câmera para fotografar sua planta.'
-      );
+      Alert.alert('Permissão necessária', 'Autorize o uso da câmera.');
       return;
     }
     const result = await ImagePicker.launchCameraAsync({
@@ -110,10 +122,7 @@ export const OnboardingScreen: React.FC = () => {
   const handleOpenGallery = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert(
-        'Permissão necessária',
-        'Precisamos de acesso à galeria para escolher a foto.'
-      );
+      Alert.alert('Permissão necessária', 'Autorize o acesso à galeria.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -129,7 +138,7 @@ export const OnboardingScreen: React.FC = () => {
     if (!finalName) {
       Alert.alert(
         'Escolha uma planta',
-        'Selecione uma espécie na lista ou tire uma foto com a IA.'
+        'Busque uma espécie na API ou tire uma foto com a IA.'
       );
       return;
     }
@@ -143,7 +152,6 @@ export const OnboardingScreen: React.FC = () => {
       location: selectedRoom,
     });
 
-    setSelectedCatalogItem(null);
     setCustomName('');
     setCustomSpecies('');
     setAiTip(null);
@@ -155,47 +163,41 @@ export const OnboardingScreen: React.FC = () => {
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        {/* Banner Boas-Vindas */}
         <View style={styles.heroCard}>
-          <View style={styles.badge}>
-            <Ionicons name="leaf" size={14} color="#244233" />
-            <Text style={styles.badgeText}>BOTANIA • JARDIM INTERATIVO</Text>
-          </View>
-          <Text style={styles.title}>Bem-vinda ao seu Refúgio Botânico</Text>
+          <Text style={styles.greeting}>
+            Olá, {currentUser?.name || 'Jardineira'}! 🌱
+          </Text>
+          <Text style={styles.title}>Configure sua Estufa</Text>
           <Text style={styles.subtitle}>
-            Monte sua estufa virtual, acompanhe a hidratação com ilustrações
-            vivas e receba diagnósticos da nossa IA.
+            Pesquise qualquer planta doméstica na nossa base botânica ou tire
+            uma foto para a IA identificar.
           </Text>
         </View>
 
-        {/* Passo 1: Dropdown Pesquisável */}
-        <Text style={styles.sectionTitle}>1. Escolha a espécie da planta</Text>
+        <Text style={styles.sectionTitle}>1. Buscar espécie na API Botânica</Text>
         <TouchableOpacity
           style={styles.dropdownTrigger}
           onPress={() => setDropdownOpen(true)}
           activeOpacity={0.8}
         >
-          <View style={{ flex: 1 }}>
-            <Text
-              style={[
-                styles.dropdownText,
-                !customName && { color: '#8C857B' },
-              ]}
-            >
-              {customName
-                ? `${customName} • ${customSpecies}`
-                : 'Pesquisar pelo nome popular ou científico...'}
-            </Text>
-          </View>
-          <Ionicons name="chevron-down" size={20} color="#4A7C59" />
+          <Text
+            style={[
+              styles.dropdownText,
+              !customName && { color: '#8C857B' },
+            ]}
+          >
+            {customName
+              ? `${customName} • ${customSpecies}`
+              : 'Toque para pesquisar qualquer espécie (ex: Bonsai, Cacto)...'}
+          </Text>
+          <Ionicons name="search" size={19} color="#4A7C59" />
         </TouchableOpacity>
 
-        {/* Passo 2: Câmera ao Vivo ou Galeria com IA */}
         <View style={styles.aiCard}>
           <View style={styles.aiHeader}>
             <Ionicons name="sparkles" size={18} color="#3B6E52" />
             <Text style={styles.aiTitle}>
-              Não sabe o nome? Identifique por foto!
+              Ou identifique pela câmera / galeria:
             </Text>
           </View>
 
@@ -203,7 +205,7 @@ export const OnboardingScreen: React.FC = () => {
             <View style={styles.loadingRow}>
               <ActivityIndicator color="#3B6E52" />
               <Text style={styles.loadingText}>
-                Analisando folhas e estrutura com Gemini Vision...
+                Analisando imagem com Gemini Vision...
               </Text>
             </View>
           ) : (
@@ -235,8 +237,7 @@ export const OnboardingScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Passo 3: Onde ela fica na casa */}
-        <Text style={styles.sectionTitle}>2. Onde ela fica na sua casa?</Text>
+        <Text style={styles.sectionTitle}>2. Cômodo da casa</Text>
         <View style={styles.roomsWrap}>
           {ROOM_OPTIONS.map((room) => {
             const active = selectedRoom === room;
@@ -259,40 +260,35 @@ export const OnboardingScreen: React.FC = () => {
           })}
         </View>
 
-        {/* Botão Adicionar */}
         <TouchableOpacity
           style={styles.addBtn}
           onPress={handleAddPlant}
           activeOpacity={0.85}
         >
           <Ionicons name="add-circle" size={20} color="#FFFFFF" />
-          <Text style={styles.addBtnText}>
-            Adicionar à Estufa (+25 XP)
-          </Text>
+          <Text style={styles.addBtnText}>Adicionar à Estufa (+25 XP)</Text>
         </TouchableOpacity>
 
-        {/* Resumo das plantas na estufa */}
         <View style={styles.summaryBox}>
           <Text style={styles.summaryTitle}>
-            Sua Estufa Atual ({plants.length} plantas)
+            Plantas de {currentUser?.name} ({plants.length})
           </Text>
           <Text style={styles.summaryList}>
             {plants.map((p) => p.name).join('  •  ')}
           </Text>
         </View>
 
-        {/* Botão Entrar na Estufa */}
         <TouchableOpacity
           style={styles.enterBtn}
-          onPress={completeOnboarding}
+          onPress={() => setActiveView('app')}
           activeOpacity={0.9}
         >
-          <Text style={styles.enterBtnText}>Entrar na Estufa 🌿</Text>
+          <Text style={styles.enterBtnText}>Ir para a Estufa 🌿</Text>
           <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Modal Dropdown Pesquisável */}
+      {/* Modal de Busca Dinâmica */}
       <Modal
         visible={dropdownOpen}
         animationType="slide"
@@ -302,7 +298,7 @@ export const OnboardingScreen: React.FC = () => {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Catálogo Botânico</Text>
+              <Text style={styles.modalTitle}>Busca Botânica Online</Text>
               <TouchableOpacity onPress={() => setDropdownOpen(false)}>
                 <Ionicons name="close-circle" size={26} color="#6E6A63" />
               </TouchableOpacity>
@@ -312,69 +308,96 @@ export const OnboardingScreen: React.FC = () => {
               <Ionicons name="search" size={18} color="#7A746C" />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Buscar por nome popular (ex: Bonsai, Cacto)..."
+                placeholder="Digite o nome popular (ex: Bonsai, Cacto, Orquídea)..."
                 placeholderTextColor="#9A948C"
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 autoFocus
               />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Ionicons name="close" size={18} color="#7A746C" />
-                </TouchableOpacity>
-              )}
             </View>
 
-            <FlatList
-              data={filteredPlants}
-              keyExtractor={(item) => item.id}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.catalogRow}
-                  onPress={() => handleSelectFromDropdown(item)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.catalogPopular}>
-                      {item.popularName}
-                    </Text>
-                    <Text style={styles.catalogScientific}>
-                      {item.scientificName}
-                    </Text>
-                  </View>
-                  <View style={styles.categoryTag}>
-                    <Text style={styles.categoryTagText}>{item.category}</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-              ListEmptyComponent={
-                <View style={styles.emptyBox}>
-                  <Text style={styles.emptyText}>
-                    Não achou na lista? Use o nome digitado acima ou tire uma
-                    foto com a IA!
-                  </Text>
-                  {searchQuery.trim().length > 0 && (
-                    <TouchableOpacity
-                      style={styles.useCustomBtn}
-                      onPress={() => {
-                        setCustomName(searchQuery.trim());
-                        setCustomSpecies('Espécie personalizada');
-                        setCustomCategory(inferPlantArchetype(searchQuery));
-                        setDropdownOpen(false);
-                        setSearchQuery('');
-                      }}
-                    >
-                      <Text style={styles.useCustomBtnText}>
-                        Usar "{searchQuery.trim()}"
+            {isSearchingApi ? (
+              <View style={{ padding: 30, alignItems: 'center' }}>
+                <ActivityIndicator color="#3B6E52" />
+                <Text style={{ marginTop: 10, color: '#5E5A52' }}>
+                  Consultando espécies...
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={searchResults}
+                keyExtractor={(item) => item.id}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.catalogRow}
+                    onPress={() => handleSelectResult(item)}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.catalogPopular}>
+                        {item.popularName}
                       </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              }
-            />
+                      <Text style={styles.catalogScientific}>
+                        {item.scientificName}
+                      </Text>
+                    </View>
+                    <View style={styles.categoryTag}>
+                      <Text style={styles.categoryTagText}>
+                        {item.category}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={
+                  <View style={styles.emptyBox}>
+                    <Text style={styles.emptyText}>
+                      {searchQuery.trim().length < 2
+                        ? 'Digite pelo menos 2 letras para buscar na API botânica.'
+                        : 'Nenhuma espécie retornada. Você pode cadastrar o nome digitado abaixo:'}
+                    </Text>
+                    {searchQuery.trim().length >= 2 && (
+                      <TouchableOpacity
+                        style={styles.useCustomBtn}
+                        onPress={() => {
+                          setCustomName(searchQuery.trim());
+                          setCustomSpecies('Espécie personalizada');
+                          setCustomCategory(inferPlantArchetype(searchQuery));
+                          setDropdownOpen(false);
+                          setSearchQuery('');
+                        }}
+                      >
+                        <Text style={styles.useCustomBtnText}>
+                          Usar "{searchQuery.trim()}"
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                }
+              />
+            )}
           </View>
         </View>
       </Modal>
+
+      <ScreenTutorialPopup
+        visible={!seenTutorials.onboarding}
+        heading="Monte seu Jardim ✨"
+        onDismiss={() => dismissTutorial('onboarding')}
+        steps={[
+          {
+            icon: 'search',
+            title: 'Busca dinâmica na API',
+            description:
+              'Digite qualquer planta doméstica para buscar nome científico e cuidados automaticamente.',
+          },
+          {
+            icon: 'camera',
+            title: 'Reconhecimento por foto',
+            description:
+              'Não sabe o nome? Tire uma foto da planta que a IA identifica na hora.',
+          },
+        ]}
+      />
     </SafeAreaView>
   );
 };
@@ -386,28 +409,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#244233',
     borderRadius: 28,
     padding: 22,
-    marginBottom: 22,
+    marginBottom: 20,
   },
-  badge: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#BCE3C8',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 99,
-    marginBottom: 12,
-  },
-  badgeText: { fontSize: 11, fontWeight: '800', color: '#244233' },
-  title: { fontSize: 24, fontWeight: '800', color: '#FFFFFF', lineHeight: 30 },
-  subtitle: { fontSize: 13.5, color: '#D4E6DA', marginTop: 8, lineHeight: 20 },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#244233',
-    marginBottom: 10,
-  },
+  greeting: { fontSize: 13, fontWeight: '800', color: '#BCE3C8', marginBottom: 4 },
+  title: { fontSize: 24, fontWeight: '800', color: '#FFFFFF' },
+  subtitle: { fontSize: 13.5, color: '#D4E6DA', marginTop: 6, lineHeight: 20 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#244233', marginBottom: 10 },
   dropdownTrigger: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
@@ -420,7 +427,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 16,
   },
-  dropdownText: { fontSize: 14.5, fontWeight: '600', color: '#244233' },
+  dropdownText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#244233', marginRight: 8 },
   aiCard: {
     backgroundColor: '#E7F2EA',
     borderRadius: 20,
@@ -458,12 +465,7 @@ const styles = StyleSheet.create({
   galleryBtnText: { color: '#244233', fontWeight: '700', fontSize: 14 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   loadingText: { fontSize: 13, color: '#244233', fontWeight: '600', flex: 1 },
-  tipBox: {
-    marginTop: 12,
-    backgroundColor: '#FFFFFF',
-    padding: 10,
-    borderRadius: 12,
-  },
+  tipBox: { marginTop: 12, backgroundColor: '#FFFFFF', padding: 10, borderRadius: 12 },
   tipText: { fontSize: 12.5, color: '#244233', fontWeight: '600' },
   roomsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
   roomChip: {
@@ -488,12 +490,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   addBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
-  summaryBox: {
-    backgroundColor: '#EFECE4',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 18,
-  },
+  summaryBox: { backgroundColor: '#EFECE4', borderRadius: 16, padding: 14, marginBottom: 18 },
   summaryTitle: { fontSize: 13, fontWeight: '700', color: '#244233', marginBottom: 4 },
   summaryList: { fontSize: 12.5, color: '#5E5951', lineHeight: 18 },
   enterBtn: {
@@ -504,10 +501,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    shadowColor: '#244233',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 4,
   },
   enterBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
   modalBackdrop: {
