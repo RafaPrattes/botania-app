@@ -1,19 +1,19 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  PanResponder,
   Animated,
+  Easing,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path, Rect, Ellipse, Circle, G } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 import { PlantIllustration } from '../components/PlantIllustration';
 import { useDayNightCycle } from '../hooks/useDayNightCycle';
-import { ScreenTutorialPopup } from '../components/ScreenTutorialPopup';
+import { useWeatherSync } from '../hooks/useWeatherSync';
 
 interface PlantDetailScreenProps {
   plantId: string;
@@ -26,48 +26,64 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   onSelectPlant,
   onBack,
 }) => {
+  const { width } = useWindowDimensions();
   const plants = usePlantStore((s) => s.plants);
   const waterPlant = usePlantStore((s) => s.waterPlant);
   const seenTutorials = usePlantStore((s) => s.seenTutorials);
   const dismissTutorial = usePlantStore((s) => s.dismissTutorial);
 
   const currentIndex = plants.findIndex((p) => p.id === plantId);
-  const plant = plants[currentIndex] || plants[0];
+  const plant = currentIndex >= 0 ? plants[currentIndex] : plants[0];
 
   const [isWatering, setIsWatering] = useState(false);
   const { isNight } = useDayNightCycle();
+  const { weather, weatherLabel } = useWeatherSync();
 
-  const goPrevPlant = () => {
-    if (plants.length <= 1) return;
+  const dropAnims = useRef([
+    new Animated.Value(0),
+    new Animated.Value(0),
+    new Animated.Value(0),
+    new Animated.Value(0),
+    new Animated.Value(0),
+  ]).current;
+
+  useEffect(() => {
+    if (!isWatering) return;
+
+    const animations = dropAnims.map((anim, index) => {
+      anim.setValue(0);
+      return Animated.loop(
+        Animated.sequence([
+          Animated.delay(index * 160),
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 750,
+            easing: Easing.linear,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+    });
+
+    animations.forEach((a) => a.start());
+    return () => animations.forEach((a) => a.stop());
+  }, [isWatering, dropAnims]);
+
+  if (!plant) return null;
+
+  const isLowHp = plant.hp <= 40;
+  const isFull = plant.hp === plant.maxHp;
+  const hasMultiplePlants = plants.length > 1;
+
+  const goToPrevPlant = () => {
     const prevIdx = (currentIndex - 1 + plants.length) % plants.length;
     onSelectPlant(plants[prevIdx].id);
   };
 
-  const goNextPlant = () => {
-    if (plants.length <= 1) return;
+  const goToNextPlant = () => {
     const nextIdx = (currentIndex + 1) % plants.length;
     onSelectPlant(plants[nextIdx].id);
   };
-
-  // Gesto de deslizar horizontalmente para passar para a próxima planta
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gesture) =>
-        Math.abs(gesture.dx) > 25 && Math.abs(gesture.dy) < 25,
-      onPanResponderRelease: (_, gesture) => {
-        if (gesture.dx < -45) {
-          goNextPlant();
-        } else if (gesture.dx > 45) {
-          goPrevPlant();
-        }
-      },
-    })
-  ).current;
-
-  if (!plant) return null;
-
-  const isLowHp = plant.hp <= 45;
-  const isFull = plant.hp === plant.maxHp;
 
   const handleWater = () => {
     if (isFull || isWatering) return;
@@ -75,99 +91,145 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
     setTimeout(() => {
       waterPlant(plant.id);
       setIsWatering(false);
-    }, 1100);
+    }, 1500);
   };
+
+  // Paleta dinâmica por período do dia e clima
+  const isRainy = weather === 'rain';
+  const roomBg = isNight ? '#192231' : isRainy ? '#E3E9EC' : '#F3E8D6';
+  const windowSky = isNight ? '#0D1422' : isRainy ? '#9DB4C4' : '#CBE8F6';
+  const windowFrame = isNight ? '#2D3A4F' : '#8C6244';
+  const headerText = isNight ? '#F2EDE4' : '#244233';
+  const subText = isNight ? '#A4B3C8' : '#6A655D';
+
+  const windowSize = Math.min(245, Math.round(width * 0.6));
 
   return (
     <SafeAreaView
-      style={[
-        styles.container,
-        { backgroundColor: isNight ? '#1E2D38' : '#EFE7D6' },
-      ]}
+      style={[styles.container, { backgroundColor: roomBg }]}
       edges={['top']}
     >
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
-          style={styles.backBtn}
+          style={[
+            styles.backBtn,
+            {
+              backgroundColor: isNight
+                ? 'rgba(255,255,255,0.12)'
+                : 'rgba(255,255,255,0.85)',
+            },
+          ]}
           onPress={onBack}
-          activeOpacity={0.8}
+          activeOpacity={0.75}
         >
-          <Ionicons name="arrow-back" size={20} color="#244233" />
+          <Ionicons name="arrow-back" size={20} color={headerText} />
         </TouchableOpacity>
 
-        <View style={styles.titleCenter}>
-          <Text
-            style={[
-              styles.plantTitle,
-              { color: isNight ? '#F4EFE6' : '#244233' },
-            ]}
-            numberOfLines={1}
-          >
+        <View style={styles.headerInfo}>
+          <Text style={[styles.plantName, { color: headerText }]} numberOfLines={1}>
             {plant.name}
           </Text>
-          <Text
-            style={[
-              styles.plantSubtitle,
-              { color: isNight ? '#B8CBD9' : '#6A655C' },
-            ]}
-          >
-            {plant.species} • {isNight ? 'Noite' : 'Dia'}
-          </Text>
-        </View>
-
-        <View style={styles.counterBadge}>
-          <Text style={styles.counterText}>
-            {currentIndex + 1}/{plants.length}
+          <Text style={[styles.plantSpecies, { color: subText }]} numberOfLines={1}>
+            {plant.species} • {isNight ? 'Noite' : 'Dia'} • {weatherLabel}
           </Text>
         </View>
       </View>
 
-      {/* Cena Cozy Ghibli com Suporte a Deslizar */}
-      <View style={styles.sceneArea} {...panResponder.panHandlers}>
-        {/* Janela Ghibli com Sombra de Folhas e Sol/Lua */}
+      {/* Tutorial Único de Primeiro Acesso (Não-obrigatório) */}
+      {!seenTutorials.detail && (
+        <View style={styles.coachmarkCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.coachmarkTitle}>Prateleira Interativa</Text>
+            <Text style={styles.coachmarkBody}>
+              A janela sincroniza com o horário e o clima real da sua cidade. Use as setas laterais para alternar entre suas plantas!
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.coachmarkBtn}
+            onPress={() => dismissTutorial('detail')}
+          >
+            <Text style={styles.coachmarkBtnText}>Entendi</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Palco da Prateleira Cozy */}
+      <View style={styles.shelfStage}>
+        {/* Janela com Ciclo Dia/Noite e Chuva Real */}
         <View
           style={[
             styles.windowArch,
             {
-              backgroundColor: isNight ? '#15222E' : '#DCEEF2',
-              borderColor: isNight ? '#354A5C' : '#FAF6EE',
+              width: windowSize,
+              height: windowSize * 1.12,
+              backgroundColor: windowSky,
+              borderColor: windowFrame,
             },
           ]}
         >
+          {/* Cruz da janela */}
+          <View style={[styles.windowCrossH, { backgroundColor: windowFrame }]} />
+          <View style={[styles.windowCrossV, { backgroundColor: windowFrame }]} />
+
+          {/* Sol (Dia Limpo) ou Lua + Estrelas (Noite) */}
           {isNight ? (
             <>
-              <View style={styles.moon} />
-              <View style={[styles.star, { top: 45, left: 60 }]} />
-              <View style={[styles.star, { top: 80, right: 55 }]} />
-              <View style={[styles.star, { top: 115, left: 95 }]} />
+              <View style={styles.moon}>
+                <View style={styles.moonShadow} />
+              </View>
+              <View style={[styles.star, { top: 34, right: 44 }]} />
+              <View style={[styles.star, { top: 68, right: 66, width: 3, height: 3 }]} />
+              <View style={[styles.star, { top: 48, left: 105 }]} />
             </>
           ) : (
-            <>
-              <View style={styles.sunGlow} />
-              {/* Sombra suave de folhagem na parede (inspirado na referência) */}
-              <View style={styles.leafShadow1} />
-              <View style={styles.leafShadow2} />
-            </>
+            !isRainy && <View style={styles.sunGlow} />
           )}
-          <View style={styles.windowCrossH} />
-          <View style={styles.windowCrossV} />
+
+          {/* Gotas de Chuva na Janela quando weather === 'rain' */}
+          {isRainy && (
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              {[
+                { top: 28, left: 42 },
+                { top: 55, left: 108 },
+                { top: 40, left: 168 },
+                { top: 95, left: 68 },
+                { top: 110, left: 142 },
+                { top: 150, left: 52 },
+                { top: 165, left: 128 },
+                { top: 145, left: 185 },
+              ].map((drop, i) => (
+                <View
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    top: drop.top,
+                    left: drop.left,
+                    width: 2.5,
+                    height: 14,
+                    borderRadius: 2,
+                    backgroundColor: 'rgba(130, 195, 245, 0.85)',
+                    transform: [{ rotate: '14deg' }],
+                  }}
+                />
+              ))}
+            </View>
+          )}
         </View>
 
-        {/* Setas laterais discretas para navegar entre plantas */}
-        {plants.length > 1 && (
+        {/* Setas Laterais para Navegar entre Plantas */}
+        {hasMultiplePlants && (
           <>
             <TouchableOpacity
-              style={[styles.sideArrow, { left: 12 }]}
-              onPress={goPrevPlant}
+              style={[styles.sideNavBtn, { left: 14 }]}
+              onPress={goToPrevPlant}
               activeOpacity={0.75}
             >
               <Ionicons name="chevron-back" size={22} color="#244233" />
             </TouchableOpacity>
-
             <TouchableOpacity
-              style={[styles.sideArrow, { right: 12 }]}
-              onPress={goNextPlant}
+              style={[styles.sideNavBtn, { right: 14 }]}
+              onPress={goToNextPlant}
               activeOpacity={0.75}
             >
               <Ionicons name="chevron-forward" size={22} color="#244233" />
@@ -175,75 +237,89 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           </>
         )}
 
-        {/* Elementos Cozy na Prateleira + Planta */}
-        <View style={styles.shelfObjectsRow}>
-          {/* Livros antigos empilhados na esquerda (como na imagem 1) */}
-          <Svg width={56} height={95} viewBox="0 0 60 100" style={{ marginBottom: -4 }}>
-            <Rect x="4" y="18" width="14" height="82" rx="2" fill="#4D7868" />
-            <Rect x="6" y="28" width="10" height="3" fill="#E8D2A6" />
-            <Rect x="19" y="10" width="15" height="90" rx="2" fill="#C96A4B" />
-            <Rect x="21" y="22" width="11" height="3" fill="#F5E6C8" />
-            <Rect x="35" y="24" width="14" height="76" rx="2" fill="#D99B52" />
-            <Rect x="37" y="34" width="10" height="3" fill="#FFF5E0" />
-          </Svg>
+        {/* Planta Central + Gotas de Rega */}
+        <View style={styles.plantWrapper}>
+          {isWatering && (
+            <View style={styles.dropsContainer} pointerEvents="none">
+              {dropAnims.map((anim, i) => {
+                const translateY = anim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-15, 130],
+                });
+                const opacity = anim.interpolate({
+                  inputRange: [0, 0.2, 0.8, 1],
+                  outputRange: [0, 1, 1, 0],
+                });
+                return (
+                  <Animated.View
+                    key={i}
+                    style={[
+                      styles.waterDrop,
+                      { transform: [{ translateY }], opacity },
+                    ]}
+                  />
+                );
+              })}
+            </View>
+          )}
 
-          {/* Planta Principal */}
-          <View style={{ marginBottom: -14, zIndex: 5 }}>
-            {isWatering && (
-              <View style={styles.wateringBanner}>
-                <Ionicons name="water" size={18} color="#3B9AE1" />
-                <Text style={styles.wateringLabel}>Regando com carinho...</Text>
-              </View>
-            )}
-            <PlantIllustration
-              category={plant.category}
-              species={plant.species}
-              isLowHp={isLowHp}
-              size="large"
-            />
-          </View>
-
-          {/* Saquinho de Terra + Pazinha de Jardinagem na direita (como na imagem 4) */}
-          <Svg width={68} height={85} viewBox="0 0 80 95" style={{ marginBottom: -4 }}>
-            {/* Saquinho de estopa com terra */}
-            <Path
-              d="M12 45 C10 65, 10 88, 18 92 L52 92 C60 88, 60 65, 58 45 Q35 52, 12 45 Z"
-              fill="#C7A67B"
-              stroke="#8C6D46"
-              strokeWidth="2"
-            />
-            <Ellipse cx="35" cy="45" rx="22" ry="7" fill="#4E3524" />
-            {/* Pazinha de jardinagem apoiada */}
-            <G transform="translate(56, 38) rotate(22)">
-              <Rect x="-3" y="0" width="6" height="22" rx="3" fill="#B87344" />
-              <Path d="M-8 22 L8 22 L6 44 C5 49, -5 49, -6 44 Z" fill="#9AA5AD" stroke="#646E75" strokeWidth="1.5" />
-            </G>
-          </Svg>
+          <PlantIllustration
+            category={plant.category}
+            species={plant.species}
+            imageUrl={plant.imageUrl}
+            isLowHp={isLowHp}
+            size="large"
+          />
         </View>
 
-        {/* Prateleira de Madeira Rústica */}
-        <View style={styles.woodShelf}>
-          <View style={styles.shelfGrain} />
+        {/* Elementos Cozy na Prateleira (Livros, Saquinho de Terra e Pazinha) */}
+        <View style={styles.cozyPropsRow} pointerEvents="none">
+          {/* Pilha de 2 livros antigos à esquerda */}
+          <View style={styles.booksProp}>
+            <View style={[styles.bookSpine, { backgroundColor: '#5B7B6A', width: 44 }]} />
+            <View style={[styles.bookSpine, { backgroundColor: '#C46D53', width: 50 }]} />
+          </View>
+
+          {/* Saquinho de terra e pazinha à direita */}
+          <View style={styles.gardenToolsProp}>
+            <View style={styles.soilBag}>
+              <View style={styles.soilTop} />
+            </View>
+            <View style={styles.trowelHandle} />
+          </View>
+        </View>
+
+        {/* Prateleira de Madeira */}
+        <View style={styles.shelfPlank}>
           <View style={[styles.shelfBracket, { left: 36 }]} />
           <View style={[styles.shelfBracket, { right: 36 }]} />
         </View>
       </View>
 
-      {/* Painel Inferior de Cuidados */}
+      {/* Painel Inferior */}
       <View style={styles.bottomCard}>
-        <View style={styles.statusRow}>
+        <View style={styles.statusHeader}>
           <View>
-            <Text style={styles.statusCaption}>Saúde da Planta</Text>
+            <Text style={styles.statusLabel}>
+              Local: {plant.location} • Planta {currentIndex + 1} de {plants.length}
+            </Text>
             <Text
               style={[
                 styles.statusTitle,
                 { color: isLowHp ? '#C85A43' : '#2E7D47' },
               ]}
             >
-              {isLowHp ? 'Precisando de água...' : 'Viçosa e feliz!'}
+              {isLowHp ? 'Precisando de água...' : 'Cheia de vida!'}
             </Text>
           </View>
-          <Text style={styles.hpBig}>{plant.hp}%</Text>
+          <Text
+            style={[
+              styles.hpPercent,
+              { color: isLowHp ? '#C85A43' : '#244233' },
+            ]}
+          >
+            {plant.hp}%
+          </Text>
         </View>
 
         <View style={styles.hpTrack}>
@@ -259,18 +335,24 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
         </View>
 
         <TouchableOpacity
-          style={[styles.waterBtn, isFull && styles.waterBtnDone]}
+          style={[
+            styles.waterButton,
+            (isFull || isWatering) && styles.waterButtonDisabled,
+          ]}
           onPress={handleWater}
           disabled={isFull || isWatering}
           activeOpacity={0.85}
         >
           <Ionicons
             name="water"
-            size={21}
+            size={22}
             color={isFull ? '#9A948C' : '#FFFFFF'}
           />
           <Text
-            style={[styles.waterBtnText, isFull && styles.waterBtnTextDone]}
+            style={[
+              styles.waterButtonText,
+              isFull && styles.waterButtonTextDisabled,
+            ]}
           >
             {isFull
               ? 'Planta Hidratada'
@@ -280,33 +362,6 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           </Text>
         </TouchableOpacity>
       </View>
-
-      {/* Tutorial Único de Primeiro Acesso na Prateleira */}
-      <ScreenTutorialPopup
-        visible={!seenTutorials.detail}
-        heading="Sua Prateleira Botânica 🪴"
-        onDismiss={() => dismissTutorial('detail')}
-        steps={[
-          {
-            icon: 'swap-horizontal',
-            title: 'Deslize para o lado',
-            description:
-              'Arraste a tela para a esquerda ou direita (ou use as setas) para alternar entre suas plantas.',
-          },
-          {
-            icon: 'water',
-            title: 'Regue e ganhe XP',
-            description:
-              'Quando as folhas começarem a murchar, toque em Regar para restaurar 100% da saúde.',
-          },
-          {
-            icon: 'moon',
-            title: 'Janela viva',
-            description:
-              'A iluminação da janela acompanha o horário real do seu dia (Sol de dia, Lua à noite).',
-          },
-        ]}
-      />
     </SafeAreaView>
   );
 };
@@ -317,30 +372,44 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     paddingTop: 8,
-    paddingBottom: 6,
+    paddingBottom: 8,
     zIndex: 20,
   },
   backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleCenter: { flex: 1, alignItems: 'center', paddingHorizontal: 8 },
-  plantTitle: { fontSize: 19, fontWeight: '800' },
-  plantSubtitle: { fontSize: 12, fontStyle: 'italic', marginTop: 2 },
-  counterBadge: {
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
+  headerInfo: { flex: 1, alignItems: 'flex-end', marginLeft: 12 },
+  plantName: { fontSize: 20, fontWeight: '800' },
+  plantSpecies: { fontSize: 12, fontStyle: 'italic', marginTop: 2 },
+  coachmarkCard: {
+    marginHorizontal: 20,
+    marginTop: 4,
+    backgroundColor: '#FFFDF8',
+    borderRadius: 16,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#D8E3D9',
+    zIndex: 25,
   },
-  counterText: { fontSize: 12, fontWeight: '800', color: '#244233' },
-  sceneArea: {
+  coachmarkTitle: { fontSize: 13, fontWeight: '800', color: '#244233' },
+  coachmarkBody: { fontSize: 11.5, color: '#5A554E', marginTop: 2, lineHeight: 16 },
+  coachmarkBtn: {
+    backgroundColor: '#244233',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+  },
+  coachmarkBtnText: { color: '#FFFFFF', fontSize: 11.5, fontWeight: '700' },
+  shelfStage: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'flex-end',
@@ -349,133 +418,156 @@ const styles = StyleSheet.create({
   windowArch: {
     position: 'absolute',
     top: 10,
-    width: 255,
-    height: 290,
     borderTopLeftRadius: 130,
     borderTopRightRadius: 130,
-    borderWidth: 11,
+    borderWidth: 10,
     overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
+  },
+  windowCrossH: {
+    position: 'absolute',
+    top: '52%',
+    width: '100%',
+    height: 8,
+  },
+  windowCrossV: {
+    position: 'absolute',
+    left: '49%',
+    width: 8,
+    height: '100%',
   },
   sunGlow: {
     position: 'absolute',
-    top: 26,
-    left: 28,
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    backgroundColor: 'rgba(255, 241, 184, 0.85)',
-  },
-  leafShadow1: {
-    position: 'absolute',
-    top: 14,
-    right: -10,
-    width: 90,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(92, 134, 118, 0.16)',
-    transform: [{ rotate: '-25deg' }],
-  },
-  leafShadow2: {
-    position: 'absolute',
-    top: 52,
-    right: 10,
-    width: 75,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(92, 134, 118, 0.12)',
-    transform: [{ rotate: '-15deg' }],
+    top: 24,
+    left: 26,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: 'rgba(255, 240, 175, 0.85)',
   },
   moon: {
     position: 'absolute',
-    top: 32,
-    right: 36,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF3C4',
+    top: 28,
+    left: 34,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FFF4C2',
+    overflow: 'hidden',
+  },
+  moonShadow: {
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#0D1422',
   },
   star: {
     position: 'absolute',
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FFFBE6',
   },
-  windowCrossH: {
-    position: 'absolute',
-    width: '100%',
-    height: 7,
-    backgroundColor: 'rgba(255,255,255,0.45)',
-    top: '48%',
-  },
-  windowCrossV: {
-    position: 'absolute',
-    height: '100%',
-    width: 7,
-    backgroundColor: 'rgba(255,255,255,0.45)',
-  },
-  sideArrow: {
+  sideNavBtn: {
     position: 'absolute',
     top: '46%',
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.88)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 30,
     shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 25,
   },
-  shelfObjectsRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-  wateringBanner: {
-    position: 'absolute',
-    top: -12,
-    alignSelf: 'center',
-    flexDirection: 'row',
+  plantWrapper: {
+    zIndex: 12,
+    marginBottom: -28,
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#E3F2FD',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 99,
+  },
+  dropsContainer: {
+    position: 'absolute',
+    top: -10,
+    width: 150,
+    height: 150,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
     zIndex: 20,
   },
-  wateringLabel: { fontSize: 12, fontWeight: '700', color: '#1E6B9E' },
-  woodShelf: {
+  waterDrop: {
+    width: 7,
+    height: 18,
+    borderRadius: 4,
+    backgroundColor: '#4FC3F7',
+  },
+  cozyPropsRow: {
+    width: '84%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingHorizontal: 14,
+    marginBottom: -2,
+    zIndex: 8,
+  },
+  booksProp: {
+    alignItems: 'flex-start',
+    gap: 2,
+  },
+  bookSpine: {
+    height: 10,
+    borderRadius: 3,
+    borderLeftWidth: 4,
+    borderLeftColor: '#EFE6D5',
+  },
+  gardenToolsProp: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  soilBag: {
+    width: 30,
+    height: 26,
+    backgroundColor: '#A68263',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    overflow: 'hidden',
+    alignItems: 'center',
+  },
+  soilTop: {
+    width: '100%',
+    height: 7,
+    backgroundColor: '#4E3423',
+  },
+  trowelHandle: {
+    width: 7,
+    height: 22,
+    backgroundColor: '#C98A5B',
+    borderRadius: 3,
+    transform: [{ rotate: '18deg' }],
+  },
+  shelfPlank: {
     width: '88%',
     height: 22,
-    backgroundColor: '#9C6B43',
+    backgroundColor: '#8E6244',
     borderRadius: 6,
-    borderTopWidth: 3,
-    borderTopColor: '#BA8559',
-    shadowColor: '#3B2310',
+    borderTopWidth: 2,
+    borderTopColor: '#B58360',
+    shadowColor: '#2A180C',
     shadowOpacity: 0.35,
-    shadowRadius: 10,
+    shadowRadius: 12,
     elevation: 6,
-  },
-  shelfGrain: {
-    marginTop: 7,
-    marginHorizontal: 24,
-    height: 2,
-    backgroundColor: 'rgba(72, 43, 20, 0.25)',
-    borderRadius: 2,
   },
   shelfBracket: {
     position: 'absolute',
-    top: 22,
-    width: 14,
-    height: 24,
-    backgroundColor: '#754C2B',
+    top: 20,
+    width: 12,
+    height: 42,
+    backgroundColor: '#69462F',
     borderBottomLeftRadius: 6,
     borderBottomRightRadius: 6,
   },
@@ -483,36 +575,41 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 34,
     borderTopRightRadius: 34,
-    padding: 24,
-    paddingBottom: 30,
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 28,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 10,
   },
-  statusRow: {
+  statusHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  statusCaption: { fontSize: 12.5, color: '#7D786F', fontWeight: '600' },
+  statusLabel: { fontSize: 12.5, color: '#8A847C', fontWeight: '600' },
   statusTitle: { fontSize: 21, fontWeight: '800', marginTop: 2 },
-  hpBig: { fontSize: 20, fontWeight: '800', color: '#244233' },
+  hpPercent: { fontSize: 20, fontWeight: '800' },
   hpTrack: {
-    height: 11,
+    height: 12,
     backgroundColor: '#EFECE6',
     borderRadius: 99,
     overflow: 'hidden',
     marginBottom: 18,
   },
   hpFill: { height: '100%', borderRadius: 99 },
-  waterBtn: {
-    backgroundColor: '#4E9463',
+  waterButton: {
+    backgroundColor: '#3B7A52',
     borderRadius: 18,
     paddingVertical: 15,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 10,
   },
-  waterBtnDone: { backgroundColor: '#EFECE6' },
-  waterBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
-  waterBtnTextDone: { color: '#9A948C' },
+  waterButtonDisabled: { backgroundColor: '#EFECE6' },
+  waterButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+  waterButtonTextDisabled: { color: '#9A948C' },
 });
