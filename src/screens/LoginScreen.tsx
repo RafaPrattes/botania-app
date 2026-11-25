@@ -45,12 +45,7 @@ export const LoginScreen: React.FC = () => {
         </Text>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Entrar no meu Jardim</Text>
-          <Text style={styles.cardDesc}>
-            Cada e-mail possui sua própria estufa, plantas e nível de XP
-            salvos separadamente.
-          </Text>
-
+          <Text style={styles.cardTitle}>          Entrar no meu Jardim</Text>
           <Text style={styles.label}>Seu Nome</Text>
           <TextInput
             style={styles.input}
@@ -96,7 +91,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 24,
-    backgroundColor: '#244233',
+    backgroundColor: '#34493d',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
@@ -105,7 +100,7 @@ const styles = StyleSheet.create({
   brand: {
     fontSize: 30,
     fontWeight: '800',
-    color: '#244233',
+    color: '#34493d',
     textAlign: 'center',
   },
   tagline: {
@@ -121,25 +116,25 @@ const styles = StyleSheet.create({
     padding: 22,
     borderWidth: 1.5,
     borderColor: '#E2EBE3',
-    shadowColor: '#244233',
+    shadowColor: '#34493d',
     shadowOpacity: 0.08,
     shadowRadius: 12,
     elevation: 3,
   },
-  cardTitle: { fontSize: 19, fontWeight: '800', color: '#244233', marginBottom: 4 },
+  cardTitle: { fontSize: 19, fontWeight: '800', color: '#34493d', marginBottom: 4 },
   cardDesc: { fontSize: 12.5, color: '#6E6A63', lineHeight: 18, marginBottom: 18 },
-  label: { fontSize: 13, fontWeight: '700', color: '#244233', marginBottom: 6 },
+  label: { fontSize: 13, fontWeight: '700', color: '#34493d', marginBottom: 6 },
   input: {
     backgroundColor: '#F6F3EC',
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 14.5,
-    color: '#244233',
+    color: '#34493d',
     marginBottom: 14,
   },
   enterBtn: {
-    backgroundColor: '#3B6E52',
+    backgroundColor: '#34493d',
     borderRadius: 16,
     paddingVertical: 15,
     flexDirection: 'row',
