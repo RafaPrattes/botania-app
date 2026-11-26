@@ -1,6 +1,9 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { PlantArchetype } from '../services/plantSpeciesService';
+import { AppLanguage } from '../theme/theme';
+import { scheduleSpeciesWaterReminder } from '../utils/wateringSchedule';
 
 export interface Plant {
   id: string;
@@ -11,6 +14,7 @@ export interface Plant {
   imageUrl?: string;
   hp: number;
   maxHp: number;
+  lastWateredAt?: string;
 }
 
 export interface ChatMessage {
@@ -21,295 +25,161 @@ export interface ChatMessage {
   timestamp: string;
 }
 
-export interface UserAccount {
-  id: string;
+export interface GardenerProfile {
   name: string;
-  email: string;
-  passwordHash: string;
-}
-
-interface UserGardenData {
-  plants: Plant[];
-  xp: number;
-  seenTutorials: {
-    home?: boolean;
-    detail?: boolean;
-    ai?: boolean;
-  };
-  chatHistory: ChatMessage[];
+  avatarUri?: string;
+  darkMode: boolean;
+  language: AppLanguage;
 }
 
 interface PlantStoreState {
-  currentUser: UserAccount | null;
+  profile: GardenerProfile;
   plants: Plant[];
   xp: number;
-  seenTutorials: {
-    home?: boolean;
-    detail?: boolean;
-    ai?: boolean;
-  };
   chatHistory: ChatMessage[];
-  loginOrRegister: (
-    mode: 'login' | 'register',
-    name: string,
-    email: string,
-    password: string
-  ) => Promise<{ ok: boolean; error?: string }>;
-  logoutUser: () => void;
+  seenTutorials: { home?: boolean; detail?: boolean; ai?: boolean };
+  updateProfile: (patch: Partial<GardenerProfile>) => void;
   addPlantsBatch: (newPlants: Omit<Plant, 'id' | 'hp' | 'maxHp'>[]) => void;
   waterPlant: (id: string) => void;
   simulateDay: () => void;
   dismissTutorial: (screen: 'home' | 'detail' | 'ai') => void;
   appendChatMessage: (msg: ChatMessage) => void;
   clearChatHistory: () => void;
+  exportBackupJson: () => string;
+  importBackupJson: (rawJson: string) => boolean;
+  resetGarden: () => void;
 }
 
-const ACCOUNTS_INDEX_KEY = 'botania-accounts-index-v1';
-const getStorageKey = (userId: string) => `botania-garden-v6-${userId}`;
-
-const DEFAULT_WELCOME_MSG: ChatMessage = {
+const WELCOME_MSG: ChatMessage = {
   id: 'welcome-1',
   role: 'ai',
-  text: 'Olá! Sou o BotanIA, seu assistente botânico. Envie uma foto da sua planta ou conte o que está acontecendo com as folhas para receber um diagnóstico completo!',
+  text: 'Olá! Sou o BotanIA, seu assistente botânico. Envie uma foto da sua planta ou descreva o que está observando nas folhas para receber uma orientação completa.',
   timestamp: 'Agora',
 };
 
-const persistCurrentUserData = async (
-  user: UserAccount | null,
-  data: UserGardenData
-) => {
-  if (!user) return;
-  try {
-    await AsyncStorage.setItem(getStorageKey(user.id), JSON.stringify(data));
-  } catch (err) {
-    console.warn('Erro ao salvar dados do jardim:', err);
-  }
-};
-
-export const usePlantStore = create<PlantStoreState>((set, get) => ({
-  currentUser: null,
-  plants: [],
-  xp: 0,
-  seenTutorials: {},
-  chatHistory: [DEFAULT_WELCOME_MSG],
-
-  loginOrRegister: async (mode, rawName, rawEmail, rawPassword) => {
-    const email = rawEmail.trim().toLowerCase();
-    const password = rawPassword.trim();
-    const name = rawName.trim();
-
-    // Validação estrita
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-    if (!emailRegex.test(email)) {
-      return {
-        ok: false,
-        error: 'Digite um e-mail válido (ex: jardineiro@botania.com).',
-      };
-    }
-
-    if (password.length < 6) {
-      return {
-        ok: false,
-        error: 'A senha precisa ter pelo menos 6 caracteres.',
-      };
-    }
-
-    if (mode === 'register' && name.length < 2) {
-      return {
-        ok: false,
-        error: 'Informe seu nome ou apelido de jardineiro (mín. 2 letras).',
-      };
-    }
-
-    try {
-      const rawAccounts = await AsyncStorage.getItem(ACCOUNTS_INDEX_KEY);
-      const accounts: Record<string, UserAccount> = rawAccounts
-        ? JSON.parse(rawAccounts)
-        : {};
-
-      const existing = accounts[email];
-
-      if (mode === 'login') {
-        if (!existing) {
-          return {
-            ok: false,
-            error:
-              'Conta não encontrada. Toque em "Criar conta" para cadastrar seu jardim.',
-          };
-        }
-        if (existing.passwordHash !== password) {
-          return {
-            ok: false,
-            error: 'Senha incorreta. Verifique e tente novamente.',
-          };
-        }
-
-        const savedRaw = await AsyncStorage.getItem(getStorageKey(existing.id));
-        const parsed: UserGardenData = savedRaw
-          ? JSON.parse(savedRaw)
-          : {
-              plants: [],
-              xp: 0,
-              seenTutorials: {},
-              chatHistory: [DEFAULT_WELCOME_MSG],
-            };
-
-        set({
-          currentUser: existing,
-          plants: parsed.plants || [],
-          xp: parsed.xp || 0,
-          seenTutorials: parsed.seenTutorials || {},
-          chatHistory:
-            parsed.chatHistory && parsed.chatHistory.length > 0
-              ? parsed.chatHistory
-              : [DEFAULT_WELCOME_MSG],
-        });
-
-        return { ok: true };
-      } else {
-        if (existing) {
-          return {
-            ok: false,
-            error: 'Este e-mail já está cadastrado. Use a aba "Entrar".',
-          };
-        }
-
-        const newAccount: UserAccount = {
-          id: email.replace(/[^a-z0-9]/g, '_'),
-          name,
-          email,
-          passwordHash: password,
-        };
-
-        accounts[email] = newAccount;
-        await AsyncStorage.setItem(
-          ACCOUNTS_INDEX_KEY,
-          JSON.stringify(accounts)
-        );
-
-        const initialData: UserGardenData = {
-          plants: [],
-          xp: 0,
-          seenTutorials: {},
-          chatHistory: [DEFAULT_WELCOME_MSG],
-        };
-
-        await persistCurrentUserData(newAccount, initialData);
-
-        set({
-          currentUser: newAccount,
-          ...initialData,
-        });
-
-        return { ok: true };
-      }
-    } catch {
-      return {
-        ok: false,
-        error: 'Não foi possível acessar o armazenamento local do aparelho.',
-      };
-    }
-  },
-
-  logoutUser: () => {
-    set({
-      currentUser: null,
+export const usePlantStore = create<PlantStoreState>()(
+  persist(
+    (set, get) => ({
+      profile: {
+        name: 'Jardineiro',
+        darkMode: false,
+        language: 'pt',
+      },
       plants: [],
       xp: 0,
+      chatHistory: [WELCOME_MSG],
       seenTutorials: {},
-      chatHistory: [DEFAULT_WELCOME_MSG],
-    });
-  },
 
-  addPlantsBatch: (newPlants) => {
-    const state = get();
-    const created: Plant[] = newPlants.map((p, idx) => ({
-      ...p,
-      id: `${Date.now()}-${idx}`,
-      hp: 80,
-      maxHp: 100,
-    }));
-    const updatedPlants = [...state.plants, ...created];
-    const updatedXp = state.xp + created.length * 15;
+      updateProfile: (patch) =>
+        set((state) => ({
+          profile: { ...state.profile, ...patch },
+        })),
 
-    set({ plants: updatedPlants, xp: updatedXp });
-    persistCurrentUserData(state.currentUser, {
-      plants: updatedPlants,
-      xp: updatedXp,
-      seenTutorials: state.seenTutorials,
-      chatHistory: state.chatHistory,
-    });
-  },
+      addPlantsBatch: (newPlants) => {
+        const nowIso = new Date().toISOString();
+        const created: Plant[] = newPlants.map((p, idx) => {
+          scheduleSpeciesWaterReminder(p.name, p.category);
+          return {
+            ...p,
+            id: `${Date.now()}-${idx}`,
+            hp: 85,
+            maxHp: 100,
+            lastWateredAt: nowIso,
+          };
+        });
 
-  waterPlant: (id) => {
-    const state = get();
-    const updatedPlants = state.plants.map((p) =>
-      p.id === id ? { ...p, hp: p.maxHp } : p
-    );
-    const updatedXp = state.xp + 10;
+        set((state) => ({
+          plants: [...state.plants, ...created],
+          xp: state.xp + created.length * 15,
+        }));
+      },
 
-    set({ plants: updatedPlants, xp: updatedXp });
-    persistCurrentUserData(state.currentUser, {
-      plants: updatedPlants,
-      xp: updatedXp,
-      seenTutorials: state.seenTutorials,
-      chatHistory: state.chatHistory,
-    });
-  },
+      waterPlant: (id) => {
+        const nowIso = new Date().toISOString();
+        const target = get().plants.find((p) => p.id === id);
+        if (target) {
+          scheduleSpeciesWaterReminder(target.name, target.category);
+        }
 
-  simulateDay: () => {
-    const state = get();
-    const updatedPlants = state.plants.map((p) => ({
-      ...p,
-      hp: Math.max(0, p.hp - 20),
-    }));
+        set((state) => ({
+          plants: state.plants.map((p) =>
+            p.id === id ? { ...p, hp: p.maxHp, lastWateredAt: nowIso } : p
+          ),
+          xp: state.xp + 10,
+        }));
+      },
 
-    set({ plants: updatedPlants });
-    persistCurrentUserData(state.currentUser, {
-      plants: updatedPlants,
-      xp: state.xp,
-      seenTutorials: state.seenTutorials,
-      chatHistory: state.chatHistory,
-    });
-  },
+      simulateDay: () =>
+        set((state) => ({
+          plants: state.plants.map((p) => ({
+            ...p,
+            hp: Math.max(0, p.hp - 20),
+          })),
+        })),
 
-  dismissTutorial: (screen) => {
-    const state = get();
-    const updatedTutorials = { ...state.seenTutorials, [screen]: true };
+      dismissTutorial: (screen) =>
+        set((state) => ({
+          seenTutorials: { ...state.seenTutorials, [screen]: true },
+        })),
 
-    set({ seenTutorials: updatedTutorials });
-    persistCurrentUserData(state.currentUser, {
-      plants: state.plants,
-      xp: state.xp,
-      seenTutorials: updatedTutorials,
-      chatHistory: state.chatHistory,
-    });
-  },
+      appendChatMessage: (msg) =>
+        set((state) => ({
+          chatHistory: [...state.chatHistory, msg],
+        })),
 
-  appendChatMessage: (msg) => {
-    const state = get();
-    const updatedChat = [...state.chatHistory, msg];
-    set({ chatHistory: updatedChat });
-    persistCurrentUserData(state.currentUser, {
-      plants: state.plants,
-      xp: state.xp,
-      seenTutorials: state.seenTutorials,
-      chatHistory: updatedChat,
-    });
-  },
+      clearChatHistory: () =>
+        set({
+          chatHistory: [WELCOME_MSG],
+        }),
 
-  clearChatHistory: () => {
-    const state = get();
-    const resetChat = [DEFAULT_WELCOME_MSG];
-    set({ chatHistory: resetChat });
-    persistCurrentUserData(state.currentUser, {
-      plants: state.plants,
-      xp: state.xp,
-      seenTutorials: state.seenTutorials,
-      chatHistory: resetChat,
-    });
-  },
-}));
+      exportBackupJson: () => {
+        const { profile, plants, xp, chatHistory } = get();
+        return JSON.stringify(
+          {
+            app: 'BotanIA',
+            version: '7.0',
+            exportedAt: new Date().toISOString(),
+            profile,
+            plants,
+            xp,
+            chatHistory,
+          },
+          null,
+          2
+        );
+      },
+
+      importBackupJson: (rawJson) => {
+        try {
+          const parsed = JSON.parse(rawJson);
+          if (!parsed || !Array.isArray(parsed.plants)) return false;
+          set({
+            profile: parsed.profile || get().profile,
+            plants: parsed.plants,
+            xp: typeof parsed.xp === 'number' ? parsed.xp : 0,
+            chatHistory: Array.isArray(parsed.chatHistory)
+              ? parsed.chatHistory
+              : [WELCOME_MSG],
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+
+      resetGarden: () =>
+        set({
+          plants: [],
+          xp: 0,
+          chatHistory: [WELCOME_MSG],
+        }),
+    }),
+    {
+      name: 'botania-local-first-v7',
+      storage: createJSONStorage(() => AsyncStorage),
+    }
+  )
+);
 
 export const selectCurrentLevel = (state: PlantStoreState) =>
   Math.floor(state.xp / 100) + 1;
