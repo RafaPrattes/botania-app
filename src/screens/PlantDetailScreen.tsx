@@ -58,7 +58,6 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
@@ -76,11 +75,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
         </View>
       </View>
 
-      {/* Palco da Prateleira com greenhouse_bg.png */}
+      {/* Palco da Janela Ghibli: o parapeito pintado da imagem é a prateleira */}
       <ImageBackground
         source={require('../../assets/ghibli/greenhouse_bg.png')}
         style={styles.shelfStage}
-        imageStyle={{ opacity: profile.darkMode ? 0.45 : 0.92 }}
+        imageStyle={{ opacity: profile.darkMode ? 0.55 : 0.96 }}
         resizeMode="cover"
       >
         <View style={styles.stageRow}>
@@ -95,11 +94,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
             <View style={{ width: 38 }} />
           )}
 
+          {/* Dica: se quiser subir ou descer 10px no parapeito, ajuste paddingBottom em shelfStage */}
           <View style={styles.plantCenter}>
             <PlantIllustration
               category={plant.category}
               species={plant.species}
-              imageUrl={plant.imageUrl}
               isLowHp={isLowHp}
               size="large"
             />
@@ -116,11 +115,9 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
             <View style={{ width: 38 }} />
           )}
         </View>
-
-        <View style={styles.woodenShelf} />
       </ImageBackground>
 
-      {/* Painel Inferior de Hidratação e Lembretes */}
+      {/* Painel Inferior */}
       <View
         style={[
           styles.bottomPanel,
@@ -241,31 +238,28 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
     alignItems: 'center',
-    paddingBottom: 24,
+    paddingBottom: 26,
   },
   stageRow: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 10,
   },
   navArrow: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(255,255,255,0.88)',
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 5,
   },
-  plantCenter: { alignItems: 'center', marginBottom: -8, zIndex: 2 },
-  woodenShelf: {
-    width: '86%',
-    height: 16,
-    borderRadius: 6,
-    backgroundColor: '#7C5438',
-    borderTopWidth: 2,
-    borderTopColor: '#9A6B4A',
+  plantCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
   },
   bottomPanel: {
     borderTopLeftRadius: 30,

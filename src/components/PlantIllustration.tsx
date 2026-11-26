@@ -4,6 +4,7 @@ import {
   Image,
   Animated,
   StyleSheet,
+  Dimensions,
   ImageSourcePropType,
 } from 'react-native';
 import { PlantArchetype } from '../services/plantSpeciesService';
@@ -16,22 +17,20 @@ interface PlantIllustrationProps {
   size?: 'small' | 'large';
 }
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
 /**
- * Quando salvar seus PNGs estilo Ghibli em assets/ghibli/,
- * descomente as linhas abaixo para ativá-los automaticamente:
+ * Descomente APENAS os arquivos que já existem em assets/ghibli/
  */
 const LOCAL_GHIBLI_ASSETS: Partial<Record<PlantArchetype, ImageSourcePropType>> = {
   // pendente: require('../../assets/ghibli/pendente.png'),
-  // suculenta: require('../../assets/ghibli/suculenta.png'),
-  // cacto: require('../../assets/ghibli/cacto.png'),
-  // bonsai: require('../../assets/ghibli/bonsai.png'),
+  suculenta: require('../../assets/ghibli/suculenta.png'),
+  cacto: require('../../assets/ghibli/cacto.png'),
+  bonsai: require('../../assets/ghibli/bonsai_japones.png'),
   // flor: require('../../assets/ghibli/flor.png'),
   // folhagem: require('../../assets/ghibli/folhagem.png'),
 };
 
-/**
- * Fotografias botânicas aconchegantes por espécie (fallback rico para nunca parecer vazio)
- */
 const BOTANICAL_FALLBACK_PHOTOS: Record<PlantArchetype, string> = {
   pendente:
     'https://images.unsplash.com/photo-1614594975525-e45190c55d0b?auto=format&fit=crop&w=600&q=80',
@@ -49,13 +48,12 @@ const BOTANICAL_FALLBACK_PHOTOS: Record<PlantArchetype, string> = {
 
 export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
   category = 'folhagem',
-  imageUrl,
   isLowHp,
   size = 'large',
 }) => {
   const breatheAnim = useRef(new Animated.Value(0)).current;
   const isSmall = size === 'small';
-  const boxSize = isSmall ? 64 : 216;
+  const boxSize = isSmall ? 64 : Math.min(SCREEN_WIDTH * 0.78, 300);
 
   useEffect(() => {
     if (isSmall) return;
@@ -63,12 +61,12 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
       Animated.sequence([
         Animated.timing(breatheAnim, {
           toValue: 1,
-          duration: 2600,
+          duration: 2800,
           useNativeDriver: true,
         }),
         Animated.timing(breatheAnim, {
           toValue: 0,
-          duration: 2600,
+          duration: 2800,
           useNativeDriver: true,
         }),
       ])
@@ -77,15 +75,14 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
     return () => loop.stop();
   }, [isSmall, breatheAnim]);
 
-  const translateY = breatheAnim.interpolate({
+  // Movimento suave de escala vertical ancorado próximo à base (efeito de respiração viva)
+  const scaleY = breatheAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, -5],
+    outputRange: [1, 1.028],
   });
 
   const localArt = LOCAL_GHIBLI_ASSETS[category];
-  const resolvedPhotoUri = imageUrl || BOTANICAL_FALLBACK_PHOTOS[category];
 
-  // 1. Arte PNG personalizada do usuário (sem moldura)
   if (localArt) {
     return (
       <Animated.View
@@ -94,8 +91,8 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
           {
             width: boxSize,
             height: boxSize,
-            opacity: isLowHp ? 0.72 : 1,
-            transform: isSmall ? [] : [{ translateY }],
+            opacity: isLowHp ? 0.74 : 1,
+            transform: isSmall ? [] : [{ scaleY }],
           },
         ]}
       >
@@ -104,28 +101,22 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
     );
   }
 
-  // 2. Retrato botânico acolhedor em moldura estilo caderno de estufa
   return (
     <Animated.View
       style={[
         styles.polaroidFrame,
         {
-          width: boxSize,
-          height: boxSize,
+          width: isSmall ? 64 : 230,
+          height: isSmall ? 64 : 230,
           borderRadius: isSmall ? 16 : 28,
           padding: isSmall ? 3 : 8,
-          transform: isSmall ? [] : [{ translateY }],
+          transform: isSmall ? [] : [{ scaleY }],
         },
       ]}
     >
-      <View
-        style={[
-          styles.imageClip,
-          { borderRadius: isSmall ? 13 : 21 },
-        ]}
-      >
+      <View style={[styles.imageClip, { borderRadius: isSmall ? 13 : 21 }]}>
         <Image
-          source={{ uri: resolvedPhotoUri }}
+          source={{ uri: BOTANICAL_FALLBACK_PHOTOS[category] }}
           style={styles.fullImg}
           resizeMode="cover"
         />
@@ -138,7 +129,7 @@ export const PlantIllustration: React.FC<PlantIllustrationProps> = ({
 const styles = StyleSheet.create({
   artWrapper: {
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
   },
   polaroidFrame: {
     backgroundColor: '#FAF7F0',

@@ -1,145 +1,145 @@
-import { PlantArchetype, inferPlantArchetype } from './plantSpeciesService';
+import { inferPlantArchetype, PlantArchetype } from './plantSpeciesService';
 
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim();
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-const BOTANIST_SYSTEM_PROMPT = `Você é o BotanIA, um mestre botânico amigável e especialista em plantas domésticas.
-Analise a foto e/ou dúvida do usuário e responda em português (PT-BR) de forma acolhedora e objetiva, em no máximo 3 tópicos curtos:
-1. Identificação da espécie (nome popular e científico) e saúde visual das folhas/espinhos/caules.
-2. Diagnóstico provável (ex: excesso de água, falta de luz, baixa umidade).
-3. Passo a passo imediato do que fazer hoje.`;
+function cleanMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/^#+\s*/gm, '')
+    .trim();
+}
+
+export async function analyzePlantWithGemini(
+  userQuestion: string,
+  imageBase64?: string
+): Promise<string> {
+  if (!GEMINI_API_KEY) {
+    return 'Chave da API do Gemini não encontrada. Verifique EXPO_PUBLIC_GEMINI_API_KEY no arquivo .env e reinicie o servidor com npx expo start -c.';
+  }
+
+  const promptText =
+    userQuestion.trim() ||
+    'Analise esta planta e me dê orientações práticas de cuidados.';
+
+  const parts: any[] = [
+    {
+      text: `Você é o BotanIA, um consultor botânico gentil e objetivo. Responda em português do Brasil, sem usar asteriscos ou markdown, em parágrafos curtos e claros. Dúvida do usuário: ${promptText}`,
+    },
+  ];
+
+  if (imageBase64) {
+    parts.push({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: imageBase64,
+      },
+    });
+  }
+
+  try {
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1024,
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      }),
+    });
+
+    const data = await response.json();
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!raw) {
+      return 'Não consegui gerar uma resposta agora. Tente enviar a pergunta novamente em alguns segundos.';
+    }
+
+    return cleanMarkdown(raw);
+  } catch {
+    return 'Sem conexão com a consultoria botânica no momento. Verifique sua internet e tente novamente.';
+  }
+}
 
 export interface IdentifiedPlantResult {
   popularName: string;
   scientificName: string;
   category: PlantArchetype;
-  careTip: string;
-}
-
-export async function consultBotanistAI(
-  imageBase64: string | null,
-  userPrompt: string
-): Promise<string> {
-  if (!GEMINI_API_KEY) {
-    return '⚠️ Chave EXPO_PUBLIC_GEMINI_API_KEY não configurada no arquivo .env. Adicione sua chave do Google AI Studio na raiz do projeto e reinicie o Expo com "npx expo start -c".';
-  }
-
-  try {
-    const parts: any[] = [
-      {
-        text: `${BOTANIST_SYSTEM_PROMPT}\n\nPergunta do usuário: ${
-          userPrompt || 'Analise esta planta e me dê dicas de cuidado.'
-        }`,
-      },
-    ];
-
-    if (imageBase64) {
-      parts.push({
-        inline_data: {
-          mime_type: 'image/jpeg',
-          data: imageBase64,
-        },
-      });
-    }
-
-    const response = await fetch(GEMINI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { temperature: 0.35, maxOutputTokens: 500 },
-      }),
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data?.error?.message || 'Erro na API Gemini');
-    }
-
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!reply) {
-      throw new Error('A IA não retornou texto para esta imagem.');
-    }
-    return reply;
-  } catch (error: any) {
-    return `Não foi possível concluir a análise agora (${error.message}). Verifique sua conexão e tente enviar uma foto mais nítida.`;
-  }
 }
 
 export async function identifyPlantFromPhoto(
   imageBase64: string
-): Promise<IdentifiedPlantResult> {
+): Promise<
+  | { ok: true; data: IdentifiedPlantResult }
+  | { ok: false; reason: 'missing_key' | 'not_a_plant' | 'network_error' }
+> {
   if (!GEMINI_API_KEY) {
-    throw new Error(
-      'Chave EXPO_PUBLIC_GEMINI_API_KEY ausente no arquivo .env. Configure o .env e reinicie o Expo com "npx expo start -c".'
-    );
+    return { ok: false, reason: 'missing_key' };
   }
 
-  const prompt = `Analise cuidadosamente a imagem enviada.
-Se NÃO houver uma planta visível ou a imagem estiver ilegível, retorne {"error": "Não foi possível identificar uma planta nítida nesta foto. Tente aproximar a câmera com boa iluminação."}.
-Caso haja uma planta, identifique a espécie real (cacto, suculenta, bonsai, pendente, flor ou folhagem) e retorne APENAS JSON válido:
-{
-  "popularName": "Nome popular em português",
-  "scientificName": "Nome científico",
-  "category": "cacto | suculenta | bonsai | pendente | flor | folhagem",
-  "careTip": "Uma dica prática e curta de cuidado"
-}`;
-
-  const response = await fetch(GEMINI_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
-          ],
+  try {
+    const response = await fetch(GEMINI_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: 'Identifique esta planta e responda APENAS JSON válido no formato: {"popularName":"Nome popular em português do Brasil","scientificName":"Nome científico","category":"pendente|suculenta|cacto|bonsai|flor|folhagem"}. Escolha a categoria visual mais fiel. Se não houver planta nítida na foto, responda {"error":"not_a_plant"}.',
+              },
+              {
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: imageBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 300,
+          responseMimeType: 'application/json',
+          thinkingConfig: { thinkingBudget: 0 },
         },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
+      }),
+    });
+
+    const json = await response.json();
+    const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return { ok: false, reason: 'network_error' };
+
+    const parsed = JSON.parse(rawText);
+    if (parsed?.error === 'not_a_plant' || !parsed?.popularName) {
+      return { ok: false, reason: 'not_a_plant' };
+    }
+
+    const validCategories: PlantArchetype[] = [
+      'pendente',
+      'suculenta',
+      'cacto',
+      'bonsai',
+      'flor',
+      'folhagem',
+    ];
+    const resolvedCategory = validCategories.includes(parsed.category)
+      ? parsed.category
+      : inferPlantArchetype(`${parsed.popularName} ${parsed.scientificName}`);
+
+    return {
+      ok: true,
+      data: {
+        popularName: parsed.popularName,
+        scientificName: parsed.scientificName || parsed.popularName,
+        category: resolvedCategory,
       },
-    }),
-  });
-
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data?.error?.message || 'Falha ao comunicar com Gemini Vision.');
+    };
+  } catch {
+    return { ok: false, reason: 'network_error' };
   }
-
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) {
-    throw new Error('Sem resposta do modelo de visão. Tente novamente.');
-  }
-
-  const parsed = JSON.parse(rawText);
-  if (parsed.error) {
-    throw new Error(parsed.error);
-  }
-
-  if (!parsed.popularName) {
-    throw new Error('Espécie não reconhecida com segurança. Tente outro ângulo.');
-  }
-
-  const validCategories: PlantArchetype[] = [
-    'pendente',
-    'suculenta',
-    'cacto',
-    'bonsai',
-    'flor',
-    'folhagem',
-  ];
-
-  const category: PlantArchetype = validCategories.includes(parsed.category)
-    ? parsed.category
-    : inferPlantArchetype(`${parsed.popularName} ${parsed.scientificName || ''}`);
-
-  return {
-    popularName: parsed.popularName,
-    scientificName: parsed.scientificName || 'Espécie botânica',
-    category,
-    careTip: parsed.careTip || 'Mantenha em ambiente iluminado.',
-  };
 }
