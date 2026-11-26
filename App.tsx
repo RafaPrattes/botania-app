@@ -18,7 +18,9 @@ import { useLofiAudio } from './src/hooks/useLofiAudio';
 import { ScreenTutorialPopup } from './src/components/ScreenTutorialPopup';
 
 export default function App() {
-  const activeView = usePlantStore((s) => s.activeView);
+  const activeView = usePlantStore(
+    (s) => (s as typeof s & { activeView?: 'login' | 'onboarding' }).activeView
+  );
   const seenTutorials = usePlantStore((s) => s.seenTutorials);
   const dismissTutorial = usePlantStore((s) => s.dismissTutorial);
 
