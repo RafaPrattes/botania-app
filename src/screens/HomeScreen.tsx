@@ -2,9 +2,11 @@ import React from 'react';
 import {
   View,
   Text,
-  FlatList,
   TouchableOpacity,
+  FlatList,
   StyleSheet,
+  ImageBackground,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,349 +14,698 @@ import {
   usePlantStore,
   selectCurrentLevel,
   selectXpProgress,
-  Plant,
 } from '../store/usePlantStore';
 import { PlantIllustration } from '../components/PlantIllustration';
-import { useWeatherSync } from '../hooks/useWeatherSync';
+import { PALETTES, TRANSLATIONS } from '../theme/theme';
+import { getNextWateringLabel } from '../utils/wateringSchedule';
 
 interface HomeScreenProps {
-  onSelectPlant: (plantId: string) => void;
-  isLofiPlaying: boolean;
-  onToggleLofi: () => void;
+  onSelectPlant: (id: string) => void;
+  onAddPlant: () => void;
+  onOpenDrawer: () => void;
+  isMusicPlaying: boolean;
+  onToggleMusic: () => void;
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
   onSelectPlant,
-  isLofiPlaying,
-  onToggleLofi,
+  onAddPlant,
+  onOpenDrawer,
+  isMusicPlaying,
+  onToggleMusic,
 }) => {
-  const currentUser = usePlantStore((s) => s.currentUser);
   const plants = usePlantStore((s) => s.plants);
+  const profile = usePlantStore((s) => s.profile);
   const waterPlant = usePlantStore((s) => s.waterPlant);
   const simulateDay = usePlantStore((s) => s.simulateDay);
-  const setActiveView = usePlantStore((s) => s.setActiveView);
-  const logoutUser = usePlantStore((s) => s.logoutUser);
-
-  const level = usePlantStore(selectCurrentLevel);
+  const addPlantsBatch = usePlantStore((s) => s.addPlantsBatch);
+  const currentLevel = usePlantStore(selectCurrentLevel);
   const xpProgress = usePlantStore(selectXpProgress);
-  const { weather, temperature, weatherLabel } = useWeatherSync();
 
-  const renderPlantCard = ({ item }: { item: Plant }) => {
-    const isLowHp = item.hp <= 40;
-    const isFull = item.hp === item.maxHp;
+  const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
+  const t = TRANSLATIONS[profile.language];
 
-    return (
-      <TouchableOpacity
-        style={styles.card}
-        activeOpacity={0.88}
-        onPress={() => onSelectPlant(item.id)}
-      >
-        <View style={styles.cardTopRow}>
-          <View style={styles.avatarBox}>
-            <PlantIllustration
-              category={item.category}
-              species={item.species}
-              isLowHp={isLowHp}
-              size="small"
-            />
-          </View>
-
-          <View style={styles.plantMeta}>
-            <Text style={styles.plantName} numberOfLines={1}>
-              {item.name}
-            </Text>
-            <Text style={styles.plantSpecies} numberOfLines={1}>
-              {item.species}
-            </Text>
-            <View style={styles.locationBadge}>
-              <Ionicons name="location-outline" size={11} color="#4A7C59" />
-              <Text style={styles.locationText}>{item.location}</Text>
-            </View>
-          </View>
-
-          <View
-            style={[
-              styles.hpBadge,
-              { backgroundColor: isLowHp ? '#FDECE8' : '#E5F2E8' },
-            ]}
-          >
-            <Text
-              style={[
-                styles.hpBadgeText,
-                { color: isLowHp ? '#C85A43' : '#2E7D47' },
-              ]}
-            >
-              {item.hp}%
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.hpTrack}>
-          <View
-            style={[
-              styles.hpFill,
-              {
-                width: `${(item.hp / item.maxHp) * 100}%`,
-                backgroundColor: isLowHp ? '#D96B52' : '#4E9463',
-              },
-            ]}
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[styles.waterBtn, isFull && styles.waterBtnDisabled]}
-          onPress={() => waterPlant(item.id)}
-          disabled={isFull}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name="water"
-            size={17}
-            color={isFull ? '#9A948C' : '#FFFFFF'}
-          />
-          <Text
-            style={[styles.waterBtnText, isFull && styles.waterBtnTextDisabled]}
-          >
-            {isFull ? 'Hidratada' : 'Regar (+10 XP)'}
-          </Text>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    );
+  const handleLoadSampleGreenhouse = () => {
+    addPlantsBatch([
+      {
+        name: 'Jiboia da Janela',
+        species: 'Epipremnum aureum',
+        category: 'pendente',
+        location: 'Sala de Estar',
+      },
+      {
+        name: 'Echeveria Roseta',
+        species: 'Echeveria elegans',
+        category: 'suculenta',
+        location: 'Escrivaninha',
+      },
+      {
+        name: 'Ficus Bonsai',
+        species: 'Ficus retusa',
+        category: 'bonsai',
+        location: 'Varanda',
+      },
+    ]);
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        {/* Barra Superior de Ações Reais */}
-        <View style={styles.topNavBar}>
-          <TouchableOpacity
-            style={styles.navPill}
-            onPress={logoutUser}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="log-out-outline" size={15} color="#FFFFFF" />
-            <Text style={styles.navPillText}>Trocar Conta</Text>
-          </TouchableOpacity>
-
-          <View style={styles.rightPills}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      edges={['top']}
+    >
+      {/* Banner Ilustrado Cozy da Estufa */}
+      <ImageBackground
+        source={require('../../assets/ghibli/greenhouse_bg.png')}
+        style={styles.heroBanner}
+        imageStyle={styles.heroImage}
+        resizeMode="cover"
+      >
+        <View style={styles.heroOverlay}>
+          {/* Top bar minimalista: Perfil à esquerda, Áudio suave à direita */}
+          <View style={styles.topBar}>
             <TouchableOpacity
+              onPress={onOpenDrawer}
+              style={styles.profilePill}
+              activeOpacity={0.8}
+            >
+              {profile.avatarUri ? (
+                <Image
+                  source={{ uri: profile.avatarUri }}
+                  style={styles.avatarThumb}
+                />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Ionicons name="menu" size={18} color="#FAF7F0" />
+                </View>
+              )}
+              <View>
+                <Text style={styles.greetingSmall}>Estufa de</Text>
+                <Text style={styles.greetingName} numberOfLines={1}>
+                  {profile.name}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Botão de Lo-Fi discreto (vidro fosco, sem cores de ligação) */}
+            <TouchableOpacity
+              onPress={onToggleMusic}
+              activeOpacity={0.8}
               style={[
-                styles.navPill,
-                isLofiPlaying && { backgroundColor: '#569E6F' },
+                styles.musicPill,
+                isMusicPlaying && styles.musicPillActive,
               ]}
-              onPress={onToggleLofi}
-              activeOpacity={0.75}
             >
               <Ionicons
-                name={isLofiPlaying ? 'volume-high' : 'musical-notes'}
-                size={15}
-                color="#FFFFFF"
+                name={isMusicPlaying ? 'musical-notes' : 'volume-mute-outline'}
+                size={16}
+                color={isMusicPlaying ? '#1E352B' : '#FAF7F0'}
               />
-              <Text style={styles.navPillText}>
-                {isLofiPlaying ? 'Lo-Fi ON' : 'Lo-Fi'}
+              <Text
+                style={[
+                  styles.musicText,
+                  isMusicPlaying && styles.musicTextActive,
+                ]}
+              >
+                {isMusicPlaying ? 'Lo-Fi' : 'Som'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Título + Progresso de Nível */}
+          <View style={styles.heroBottom}>
+            <View style={styles.titleRow}>
+              <Text style={styles.heroTitle}>{t.greenhouse}</Text>
+              <View style={styles.levelBadge}>
+                <Text style={styles.levelText}>Nível {currentLevel}</Text>
+              </View>
+            </View>
+
+            <View style={styles.xpRow}>
+              <View style={styles.xpTrack}>
+                <View style={[styles.xpFill, { width: `${xpProgress}%` }]} />
+              </View>
+              <Text style={styles.xpLabel}>{xpProgress}/100 XP</Text>
+            </View>
+          </View>
+        </View>
+      </ImageBackground>
+
+      {/* Barra de Ações Editoriais (separada do áudio) */}
+      <View style={styles.actionsStrip}>
+        <TouchableOpacity
+          onPress={onAddPlant}
+          activeOpacity={0.85}
+          style={[
+            styles.addPlantBtn,
+            { backgroundColor: colors.mossDeep },
+          ]}
+        >
+          <Ionicons
+            name="add-circle-outline"
+            size={19}
+            color={profile.darkMode ? '#131E19' : '#FAF7F0'}
+          />
+          <Text
+            style={[
+              styles.addPlantText,
+              { color: profile.darkMode ? '#131E19' : '#FAF7F0' },
+            ]}
+          >
+            Nova Planta
+          </Text>
+        </TouchableOpacity>
+
+        {plants.length > 0 && (
+          <TouchableOpacity
+            onPress={simulateDay}
+            activeOpacity={0.75}
+            style={[
+              styles.simBtn,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons
+              name="sunny-outline"
+              size={16}
+              color={colors.textSecondary}
+            />
+            <Text style={[styles.simText, { color: colors.textSecondary }]}>
+              +1 dia
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Lista de Plantas ou Cartão de Boas-Vindas Vivo */}
+      <FlatList
+        data={plants}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View
+            style={[
+              styles.emptyCard,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.emptyIconCircle,
+                { backgroundColor: colors.surfaceAlt },
+              ]}
+            >
+              <Ionicons
+                name="leaf-outline"
+                size={34}
+                color={colors.mossPrimary}
+              />
+            </View>
+            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+              Sua estufa está pronta para florescer
+            </Text>
+            <Text style={[styles.emptySub, { color: colors.textSecondary }]}>
+              Adicione suas plantas reais buscando por espécie ou tirando uma
+              foto, ou experimente com um jardim de exemplo.
+            </Text>
+
+            <TouchableOpacity
+              onPress={onAddPlant}
+              style={[
+                styles.emptyPrimaryBtn,
+                { backgroundColor: colors.mossPrimary },
+              ]}
+            >
+              <Ionicons name="add" size={18} color="#FFFFFF" />
+              <Text style={styles.emptyPrimaryText}>
+                Cadastrar minha primeira planta
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.navPill, { backgroundColor: '#D97B59' }]}
-              onPress={() => setActiveView('onboarding')}
-              activeOpacity={0.75}
+              onPress={handleLoadSampleGreenhouse}
+              style={[
+                styles.emptySecondaryBtn,
+                { backgroundColor: colors.surfaceAlt },
+              ]}
             >
-              <Ionicons name="add" size={16} color="#FFFFFF" />
-              <Text style={styles.navPillText}>Planta</Text>
+              <Text
+                style={[
+                  styles.emptySecondaryText,
+                  { color: colors.textPrimary },
+                ]}
+              >
+                Carregar estufa de exemplo (3 plantas)
+              </Text>
             </TouchableOpacity>
           </View>
-        </View>
-
-        {/* Título + Clima Local */}
-        <View style={styles.titleRow}>
-          <View>
-            <Text style={styles.headerTitle}>
-              Estufa de {currentUser?.name || 'Jardineira'}
-            </Text>
-            <Text style={styles.headerSub}>
-              Nível {level} • {plants.length}{' '}
-              {plants.length === 1 ? 'planta' : 'plantas'}
-            </Text>
-          </View>
-
-          <View style={styles.weatherPill}>
-            <Ionicons
-              name={
-                weather === 'rain'
-                  ? 'rainy'
-                  : weather === 'cloudy'
-                  ? 'cloudy'
-                  : 'sunny'
-              }
-              size={15}
-              color="#FFE082"
-            />
-            <Text style={styles.weatherText}>
-              {weatherLabel}
-              {temperature !== null ? ` ${temperature}°C` : ''}
-            </Text>
-          </View>
-        </View>
-
-        {/* Barra de XP */}
-        <View style={styles.xpRow}>
-          <View style={styles.xpTrack}>
-            <View style={[styles.xpFill, { width: `${xpProgress}%` }]} />
-          </View>
-          <Text style={styles.xpText}>{xpProgress}/100 XP</Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.simBtn}
-          onPress={simulateDay}
-          activeOpacity={0.75}
-        >
-          <Ionicons name="time-outline" size={14} color="#D4E6DA" />
-          <Text style={styles.simBtnText}>Simular 1 Dia (-20 HP)</Text>
-        </TouchableOpacity>
-      </View>
-
-      <FlatList
-        data={plants}
-        keyExtractor={(item) => item.id}
-        renderItem={renderPlantCard}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyGarden}>
-            <Ionicons name="leaf-outline" size={44} color="#6E8F7B" />
-            <Text style={styles.emptyTitle}>Sua estufa ainda está vazia</Text>
-            <Text style={styles.emptySub}>
-              Toque em "+ Planta" no topo para adicionar suas primeiras espécies.
-            </Text>
-          </View>
         }
+        renderItem={({ item }) => {
+          const isLowHp = item.hp <= 40;
+          const isHydrated = item.hp >= item.maxHp;
+
+          return (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => onSelectPlant(item.id)}
+              style={[
+                styles.plantCard,
+                {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <View style={styles.cardTopRow}>
+                <PlantIllustration
+                  category={item.category}
+                  species={item.species}
+                  imageUrl={item.imageUrl}
+                  isLowHp={isLowHp}
+                  size="small"
+                />
+
+                <View style={styles.plantInfo}>
+                  <Text
+                    style={[styles.plantName, { color: colors.textPrimary }]}
+                    numberOfLines={1}
+                  >
+                    {item.name}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.plantMeta,
+                      { color: colors.textSecondary },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {item.location} • {item.species}
+                  </Text>
+                  <View style={styles.scheduleRow}>
+                    <Ionicons
+                      name="time-outline"
+                      size={12}
+                      color={colors.mossMuted}
+                    />
+                    <Text
+                      style={[
+                        styles.scheduleText,
+                        { color: colors.mossMuted },
+                      ]}
+                    >
+                      Rega: {getNextWateringLabel(item.category, item.lastWateredAt)}
+                    </Text>
+                  </View>
+                </View>
+
+                <View
+                  style={[
+                    styles.hpBadge,
+                    {
+                      backgroundColor: isLowHp
+                        ? colors.terracottaSoft
+                        : colors.surfaceAlt,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.hpBadgeText,
+                      {
+                        color: isLowHp
+                          ? colors.terracotta
+                          : colors.mossPrimary,
+                      },
+                    ]}
+                  >
+                    {item.hp}%
+                  </Text>
+                </View>
+              </View>
+
+              {/* Barra de Hidratação */}
+              <View
+                style={[
+                  styles.hpTrack,
+                  { backgroundColor: colors.surfaceAlt },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.hpFill,
+                    {
+                      width: `${item.hp}%`,
+                      backgroundColor: isLowHp
+                        ? colors.terracotta
+                        : colors.mossPrimary,
+                    },
+                  ]}
+                />
+              </View>
+
+              {/* Rodapé do Card */}
+              <View style={styles.cardFooter}>
+                <Text
+                  style={[
+                    styles.tapHint,
+                    { color: colors.textSecondary },
+                  ]}
+                >
+                  Toque para ver na prateleira
+                </Text>
+
+                <TouchableOpacity
+                  onPress={() => waterPlant(item.id)}
+                  disabled={isHydrated}
+                  style={[
+                    styles.quickWaterBtn,
+                    {
+                      backgroundColor: isHydrated
+                        ? colors.surfaceAlt
+                        : colors.mossPrimary,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="water-outline"
+                    size={14}
+                    color={isHydrated ? colors.textSecondary : '#FFFFFF'}
+                  />
+                  <Text
+                    style={[
+                      styles.quickWaterText,
+                      {
+                        color: isHydrated ? colors.textSecondary : '#FFFFFF',
+                      },
+                    ]}
+                  >
+                    {isHydrated ? t.hydrated : 'Regar'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
       />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F6F3EC' },
-  header: {
-    backgroundColor: '#244233',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 18,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-  },
-  topNavBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  rightPills: { flexDirection: 'row', gap: 8 },
-  navPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 99,
-  },
-  navPillText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
-  headerSub: { fontSize: 12.5, color: '#BCE3C8', marginTop: 2 },
-  weatherPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  weatherText: { color: '#FFF7D6', fontSize: 11.5, fontWeight: '700' },
-  xpRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  xpTrack: {
-    flex: 1,
-    height: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 99,
+  container: { flex: 1 },
+  heroBanner: {
+    height: 196,
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderRadius: 26,
     overflow: 'hidden',
   },
-  xpFill: { height: '100%', backgroundColor: '#8CE0A8', borderRadius: 99 },
-  xpText: { fontSize: 11.5, fontWeight: '700', color: '#BCE3C8' },
+  heroImage: {
+    borderRadius: 26,
+  },
+  heroOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 34, 26, 0.44)',
+    padding: 16,
+    justifyContent: 'space-between',
+  },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  profilePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(20, 34, 26, 0.55)',
+    paddingVertical: 6,
+    paddingLeft: 6,
+    paddingRight: 14,
+    borderRadius: 24,
+    maxWidth: '64%',
+  },
+  avatarThumb: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1.5,
+    borderColor: '#FAF7F0',
+  },
+  avatarPlaceholder: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  greetingSmall: {
+    color: 'rgba(250,247,240,0.78)',
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+  greetingName: {
+    color: '#FAF7F0',
+    fontSize: 13.5,
+    fontWeight: '800',
+  },
+  musicPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(20, 34, 26, 0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(250, 247, 240, 0.35)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  musicPillActive: {
+    backgroundColor: '#EFE7D6',
+    borderColor: '#EFE7D6',
+  },
+  musicText: {
+    color: '#FAF7F0',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  musicTextActive: {
+    color: '#1E352B',
+  },
+  heroBottom: {
+    gap: 8,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  heroTitle: {
+    color: '#FAF7F0',
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  levelBadge: {
+    backgroundColor: 'rgba(239, 231, 214, 0.92)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  levelText: {
+    color: '#1E352B',
+    fontSize: 11.5,
+    fontWeight: '800',
+  },
+  xpRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  xpTrack: {
+    flex: 1,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.28)',
+    overflow: 'hidden',
+  },
+  xpFill: {
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: '#E8DFC8',
+  },
+  xpLabel: {
+    color: '#FAF7F0',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  actionsStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 6,
+  },
+  addPlantBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 13,
+    borderRadius: 16,
+  },
+  addPlantText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
   simBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  simText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
+  listContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  emptyCard: {
+    borderRadius: 24,
+    borderWidth: 1,
+    padding: 24,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  emptyIconCircle: {
+    width: 66,
+    height: 66,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptySub: {
+    fontSize: 13.5,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  emptyPrimaryBtn: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    paddingVertical: 7,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 16,
+    marginBottom: 10,
   },
-  simBtnText: { fontSize: 12, fontWeight: '600', color: '#D4E6DA' },
-  listContent: { padding: 18, paddingBottom: 30, gap: 14 },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 16,
-    borderWidth: 1.5,
-    borderColor: '#E3ECE4',
-    shadowColor: '#244233',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+  emptyPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  emptySecondaryBtn: {
+    width: '100%',
+    paddingVertical: 13,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  emptySecondaryText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  plantCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 15,
+    marginBottom: 12,
   },
   cardTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 12,
   },
-  avatarBox: {
-    width: 66,
-    height: 66,
-    borderRadius: 18,
-    backgroundColor: '#F3EFE6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
+  plantInfo: {
+    flex: 1,
   },
-  plantMeta: { flex: 1 },
-  plantName: { fontSize: 16.5, fontWeight: '800', color: '#244233' },
-  plantSpecies: { fontSize: 12, fontStyle: 'italic', color: '#7A746C', marginTop: 2 },
-  locationBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 },
-  locationText: { fontSize: 11, fontWeight: '600', color: '#4A7C59' },
-  hpBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  hpBadgeText: { fontSize: 12, fontWeight: '800' },
-  hpTrack: {
-    height: 8,
-    backgroundColor: '#EFECE6',
-    borderRadius: 99,
-    overflow: 'hidden',
-    marginBottom: 12,
+  plantName: {
+    fontSize: 16,
+    fontWeight: '800',
   },
-  hpFill: { height: '100%', borderRadius: 99 },
-  waterBtn: {
-    backgroundColor: '#4E9463',
-    borderRadius: 14,
-    paddingVertical: 11,
+  plantMeta: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  scheduleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
+    gap: 4,
+    marginTop: 5,
   },
-  waterBtnDisabled: { backgroundColor: '#EFECE6' },
-  waterBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
-  waterBtnTextDisabled: { color: '#9A948C' },
-  emptyGarden: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 24 },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: '#244233', marginTop: 12 },
-  emptySub: { fontSize: 13.5, color: '#6E6A63', textAlign: 'center', marginTop: 6 },
+  scheduleText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+  },
+  hpBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  hpBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  hpTrack: {
+    height: 7,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginTop: 13,
+    marginBottom: 12,
+  },
+  hpFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  tapHint: {
+    fontSize: 11.5,
+  },
+  quickWaterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  quickWaterText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
 });

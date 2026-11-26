@@ -6,192 +6,199 @@ import {
   StyleSheet,
   StatusBar,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { usePlantStore } from './src/store/usePlantStore';
-import { LoginScreen } from './src/screens/LoginScreen';
-import { OnboardingScreen } from './src/screens/OnboardingScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { PlantDetailScreen } from './src/screens/PlantDetailScreen';
 import { AIConsultScreen } from './src/screens/AIConsultScreen';
+import { GardenMapScreen } from './src/screens/GardenMapScreen';
+import { OnboardingScreen } from './src/screens/OnboardingScreen';
+import { ProfileDrawerModal } from './src/components/ProfileDrawerModal';
+import { usePlantStore } from './src/store/usePlantStore';
 import { useLofiAudio } from './src/hooks/useLofiAudio';
-import { ScreenTutorialPopup } from './src/components/ScreenTutorialPopup';
+import { PALETTES, TRANSLATIONS } from './src/theme/theme';
+
+type AppView = 'home' | 'detail' | 'ai' | 'maps' | 'onboarding';
 
 export default function App() {
-  const activeView = usePlantStore(
-    (s) => (s as typeof s & { activeView?: 'login' | 'onboarding' }).activeView
-  );
-  const seenTutorials = usePlantStore((s) => s.seenTutorials);
-  const dismissTutorial = usePlantStore((s) => s.dismissTutorial);
-
-  const [currentTab, setCurrentTab] = useState<'home' | 'ai' | 'detail'>(
-    'home'
-  );
+  const [currentView, setCurrentView] = useState<AppView>('home');
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
-  const { isPlaying, toggleLofi } = useLofiAudio();
+  const [drawerVisible, setDrawerVisible] = useState(false);
+
+  const profile = usePlantStore((s) => s.profile);
+  const { isPlaying, toggleMusic } = useLofiAudio();
+
+  const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
+  const t = TRANSLATIONS[profile.language];
 
   const handleSelectPlant = (plantId: string) => {
     setSelectedPlantId(plantId);
-    setCurrentTab('detail');
+    setCurrentView('detail');
   };
 
-  if (activeView === 'login') {
-    return (
-      <SafeAreaProvider>
-        <StatusBar barStyle="dark-content" />
-        <LoginScreen />
-      </SafeAreaProvider>
-    );
-  }
-
-  if (activeView === 'onboarding') {
-    return (
-      <SafeAreaProvider>
-        <StatusBar barStyle="dark-content" />
-        <OnboardingScreen />
-      </SafeAreaProvider>
-    );
-  }
+  const showBottomTabs =
+    currentView === 'home' ||
+    currentView === 'ai' ||
+    currentView === 'maps';
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.root} edges={['bottom']}>
-        <StatusBar barStyle="light-content" />
+      <View style={[styles.root, { backgroundColor: colors.bg }]}>
+        <StatusBar
+          barStyle={profile.darkMode ? 'light-content' : 'dark-content'}
+        />
 
         <View style={styles.content}>
-          {currentTab === 'home' && (
-            <>
-              <HomeScreen
-                onSelectPlant={handleSelectPlant}
-                isLofiPlaying={isPlaying}
-                onToggleLofi={toggleLofi}
-              />
-              <ScreenTutorialPopup
-                visible={!seenTutorials.home}
-                heading="Bem-vinda à sua Estufa 🏡"
-                onDismiss={() => dismissTutorial('home')}
-                steps={[
-                  {
-                    icon: 'leaf',
-                    title: 'Toque em uma planta',
-                    description:
-                      'Abre a prateleira ilustrada com janela dia/noite e ferramentas.',
-                  },
-                  {
-                    icon: 'musical-notes',
-                    title: 'Música Lo-Fi & Nova Planta',
-                    description:
-                      'Use a barra superior para ligar a trilha sonora ou adicionar mais plantas.',
-                  },
-                ]}
-              />
-            </>
-          )}
-
-          {currentTab === 'ai' && (
-            <>
-              <AIConsultScreen />
-              <ScreenTutorialPopup
-                visible={!seenTutorials.ai}
-                heading="Especialista Botânico IA 🤖"
-                onDismiss={() => dismissTutorial('ai')}
-                steps={[
-                  {
-                    icon: 'camera',
-                    title: 'Envie uma foto ou dúvida',
-                    description:
-                      'Use a câmera ou galeria para diagnosticar folhas amareladas, pragas e rega.',
-                  },
-                ]}
-              />
-            </>
-          )}
-
-          {currentTab === 'detail' && selectedPlantId && (
-            <PlantDetailScreen
-              plantId={selectedPlantId}
-              onSelectPlant={(id) => setSelectedPlantId(id)}
-              onBack={() => setCurrentTab('home')}
+          {currentView === 'home' && (
+            <HomeScreen
+              onSelectPlant={handleSelectPlant}
+              onAddPlant={() => setCurrentView('onboarding')}
+              onOpenDrawer={() => setDrawerVisible(true)}
+              isMusicPlaying={isPlaying}
+              onToggleMusic={toggleMusic}
             />
           )}
+
+          {currentView === 'onboarding' && (
+            <OnboardingScreen onFinish={() => setCurrentView('home')} />
+          )}
+
+          {currentView === 'detail' && selectedPlantId && (
+            <PlantDetailScreen
+              plantId={selectedPlantId}
+              onBack={() => setCurrentView('home')}
+              onSelectPlant={handleSelectPlant}
+            />
+          )}
+
+          {currentView === 'ai' && <AIConsultScreen />}
+
+          {currentView === 'maps' && <GardenMapScreen />}
         </View>
 
-        {currentTab !== 'detail' && (
-          <View style={styles.tabBar}>
+        {showBottomTabs && (
+          <View
+            style={[
+              styles.tabBar,
+              {
+                backgroundColor: colors.surface,
+                borderTopColor: colors.border,
+              },
+            ]}
+          >
             <TouchableOpacity
               style={styles.tabItem}
-              onPress={() => setCurrentTab('home')}
-              activeOpacity={0.75}
+              onPress={() => setCurrentView('home')}
             >
-              <View
-                style={[
-                  styles.tabIconWrapper,
-                  currentTab === 'home' && styles.tabIconActive,
-                ]}
-              >
-                <Ionicons
-                  name={currentTab === 'home' ? 'leaf' : 'leaf-outline'}
-                  size={22}
-                  color={currentTab === 'home' ? '#244233' : '#8E8980'}
-                />
-              </View>
+              <Ionicons
+                name={currentView === 'home' ? 'leaf' : 'leaf-outline'}
+                size={22}
+                color={
+                  currentView === 'home'
+                    ? colors.mossPrimary
+                    : colors.textSecondary
+                }
+              />
               <Text
                 style={[
                   styles.tabLabel,
-                  currentTab === 'home' && styles.tabLabelActive,
+                  {
+                    color:
+                      currentView === 'home'
+                        ? colors.mossPrimary
+                        : colors.textSecondary,
+                  },
                 ]}
               >
-                Estufa
+                {t.greenhouse}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.tabItem}
-              onPress={() => setCurrentTab('ai')}
-              activeOpacity={0.75}
+              onPress={() => setCurrentView('ai')}
             >
-              <View
-                style={[
-                  styles.tabIconWrapper,
-                  currentTab === 'ai' && styles.tabIconActive,
-                ]}
-              >
-                <Ionicons
-                  name={currentTab === 'ai' ? 'sparkles' : 'sparkles-outline'}
-                  size={22}
-                  color={currentTab === 'ai' ? '#244233' : '#8E8980'}
-                />
-              </View>
+              <Ionicons
+                name={currentView === 'ai' ? 'sparkles' : 'sparkles-outline'}
+                size={22}
+                color={
+                  currentView === 'ai'
+                    ? colors.mossPrimary
+                    : colors.textSecondary
+                }
+              />
               <Text
                 style={[
                   styles.tabLabel,
-                  currentTab === 'ai' && styles.tabLabelActive,
+                  {
+                    color:
+                      currentView === 'ai'
+                        ? colors.mossPrimary
+                        : colors.textSecondary,
+                  },
                 ]}
               >
-                IA Botânica
+                {t.aiConsult}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.tabItem}
+              onPress={() => setCurrentView('maps')}
+            >
+              <Ionicons
+                name={currentView === 'maps' ? 'map' : 'map-outline'}
+                size={22}
+                color={
+                  currentView === 'maps'
+                    ? colors.mossPrimary
+                    : colors.textSecondary
+                }
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  {
+                    color:
+                      currentView === 'maps'
+                        ? colors.mossPrimary
+                        : colors.textSecondary,
+                  },
+                ]}
+              >
+                {t.nearbyShops}
               </Text>
             </TouchableOpacity>
           </View>
         )}
-      </SafeAreaView>
+
+        <ProfileDrawerModal
+          visible={drawerVisible}
+          onClose={() => setDrawerVisible(false)}
+        />
+      </View>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#F6F3EC' },
+  root: { flex: 1 },
   content: { flex: 1 },
   tabBar: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
-    borderTopColor: '#E4ECE5',
-    paddingVertical: 8,
-    justifyContent: 'space-around',
+    paddingTop: 10,
+    paddingBottom: 22,
+    paddingHorizontal: 12,
   },
-  tabItem: { alignItems: 'center', gap: 3, width: 110 },
-  tabIconWrapper: { paddingHorizontal: 18, paddingVertical: 5, borderRadius: 14 },
-  tabIconActive: { backgroundColor: '#BCE3C8' },
-  tabLabel: { fontSize: 11.5, fontWeight: '600', color: '#8E8980' },
-  tabLabelActive: { color: '#244233', fontWeight: '800' },
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  tabLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
 });

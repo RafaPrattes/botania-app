@@ -1,565 +1,542 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   TextInput,
+  TouchableOpacity,
   ScrollView,
   StyleSheet,
   ActivityIndicator,
-  Alert,
-  Modal,
-  FlatList,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 import {
-  searchBotanicalSpecies,
-  SpeciesSearchResult,
-  PlantArchetype,
+  searchPlantSpecies,
   inferPlantArchetype,
+  PlantCatalogOption,
+  PlantArchetype,
 } from '../services/plantSpeciesService';
-import { identifyPlantFromPhoto } from '../services/geminiService';
-import { ScreenTutorialPopup } from '../components/ScreenTutorialPopup';
+import { PALETTES } from '../theme/theme';
+import { ThemedModal } from '../components/ThemedModal';
+
+interface OnboardingScreenProps {
+  onFinish: () => void;
+}
 
 const ROOM_OPTIONS = [
   'Sala de Estar',
-  'Quarto',
   'Varanda',
+  'Quarto',
   'Cozinha',
-  'Escritório',
+  'Escrivaninha',
 ];
 
-export const OnboardingScreen: React.FC = () => {
-  const {
-    currentUser,
-    plants,
-    addPlant,
-    setActiveView,
-    seenTutorials,
-    dismissTutorial,
-  } = usePlantStore();
+const GEMINI_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SpeciesSearchResult[]>([]);
-  const [isSearchingApi, setIsSearchingApi] = useState(false);
+export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
+  onFinish,
+}) => {
+  const addPlantsBatch = usePlantStore((s) => s.addPlantsBatch);
+  const profile = usePlantStore((s) => s.profile);
+  const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
 
-  const [customName, setCustomName] = useState('');
-  const [customSpecies, setCustomSpecies] = useState('');
-  const [customCategory, setCustomCategory] =
-    useState<PlantArchetype>('folhagem');
-  const [selectedRoom, setSelectedRoom] = useState('Sala de Estar');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<PlantCatalogOption[]>([]);
+  const [searching, setSearching] = useState(false);
 
-  const [isIdentifying, setIsIdentifying] = useState(false);
-  const [aiTip, setAiTip] = useState<string | null>(null);
+  const [plantName, setPlantName] = useState('');
+  const [species, setSpecies] = useState('');
+  const [category, setCategory] = useState<PlantArchetype>('folhagem');
+  const [location, setLocation] = useState('Sala de Estar');
+  const [photoUri, setPhotoUri] = useState<string | undefined>(undefined);
+  const [identifying, setIdentifying] = useState(false);
 
-  // Busca dinâmica na API botânica com debounce de 450ms
-  useEffect(() => {
-    if (!dropdownOpen) return;
-    const q = searchQuery.trim();
-    if (q.length < 2) {
-      setSearchResults([]);
+  const [modalInfo, setModalInfo] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    tone: 'default' | 'danger' | 'success';
+  }>({
+    visible: false,
+    title: '',
+    message: '',
+    tone: 'default',
+  });
+
+  const handleSearch = async (text: string) => {
+    setQuery(text);
+    if (text.trim().length < 2) {
+      setResults([]);
+      return;
+    }
+    setSearching(true);
+    const list = await searchPlantSpecies(text);
+    setResults(list);
+    setSearching(false);
+  };
+
+  const selectSpeciesOption = (item: PlantCatalogOption) => {
+    setPlantName(item.popularName);
+    setSpecies(item.popularName);
+    setCategory(item.category);
+    if (item.imageUrl) setPhotoUri(item.imageUrl);
+    setResults([]);
+    setQuery(item.popularName);
+  };
+
+  const handlePhotoIdentify = async (fromCamera: boolean) => {
+    const fn = fromCamera
+      ? ImagePicker.launchCameraAsync
+      : ImagePicker.launchImageLibraryAsync;
+
+    const picked = await fn({
+      mediaTypes: ['images'],
+      base64: true,
+      quality: 0.6,
+    });
+
+    if (picked.canceled || !picked.assets[0]) return;
+    const asset = picked.assets[0];
+    setPhotoUri(asset.uri);
+
+    if (!GEMINI_KEY || !asset.base64) {
+      setModalInfo({
+        visible: true,
+        title: 'Foto anexada à planta',
+        message:
+          'Sua foto já foi salva no cartão da planta. Para identificação automática por IA, confirme a chave EXPO_PUBLIC_GEMINI_API_KEY no arquivo .env.',
+        tone: 'default',
+      });
       return;
     }
 
-    const timer = setTimeout(async () => {
-      setIsSearchingApi(true);
-      const results = await searchBotanicalSpecies(q);
-      setSearchResults(results);
-      setIsSearchingApi(false);
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery, dropdownOpen]);
-
-  const handleSelectResult = (item: SpeciesSearchResult) => {
-    setCustomName(item.popularName);
-    setCustomSpecies(item.scientificName);
-    setCustomCategory(item.category);
-    setAiTip(item.careSummary);
-    setDropdownOpen(false);
-    setSearchQuery('');
-  };
-
-  const processImageResult = async (result: ImagePicker.ImagePickerResult) => {
-    if (result.canceled || !result.assets[0].base64) return;
-    setIsIdentifying(true);
-    setAiTip(null);
+    setIdentifying(true);
     try {
-      const identified = await identifyPlantFromPhoto(result.assets[0].base64);
-      setCustomName(identified.popularName);
-      setCustomSpecies(identified.scientificName);
-      setCustomCategory(identified.category);
-      setAiTip(identified.careTip);
-      Alert.alert(
-        'Planta Identificada! 🌿',
-        `Espécie: ${identified.popularName} (${identified.scientificName})\n\nDica: ${identified.careTip}`
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: 'Identifique esta planta e responda APENAS em JSON válido neste formato: {"popularName":"Nome popular em português","scientificName":"Nome científico","category":"pendente|suculenta|cacto|bonsai|flor|folhagem"}. Se não houver planta clara na imagem, responda {"error":"not_a_plant"}.',
+                  },
+                  {
+                    inlineData: {
+                      mimeType: 'image/jpeg',
+                      data: asset.base64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: 'application/json',
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        }
       );
-    } catch (err: any) {
-      Alert.alert('Não foi possível identificar', err.message);
+
+      const data = await res.json();
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parsed = rawText ? JSON.parse(rawText) : null;
+
+      if (!parsed || parsed.error) {
+        setModalInfo({
+          visible: true,
+          title: 'Não conseguimos identificar com certeza',
+          message:
+            'Tente uma foto mais iluminada da planta ou digite o nome dela no campo de busca abaixo.',
+          tone: 'danger',
+        });
+      } else {
+        setPlantName(parsed.popularName || '');
+        setSpecies(parsed.scientificName || parsed.popularName || '');
+        setCategory(
+          parsed.category || inferPlantArchetype(parsed.popularName || '')
+        );
+      }
+    } catch {
+      setModalInfo({
+        visible: true,
+        title: 'Sem resposta da IA',
+        message:
+          'Sua foto foi salva! Você pode digitar o nome da espécie manualmente abaixo.',
+        tone: 'danger',
+      });
     } finally {
-      setIsIdentifying(false);
+      setIdentifying(false);
     }
   };
 
-  const handleOpenCamera = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permissão necessária', 'Autorize o uso da câmera.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      base64: true,
-      quality: 0.65,
-    });
-    await processImageResult(result);
-  };
-
-  const handleOpenGallery = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permissão necessária', 'Autorize o acesso à galeria.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      base64: true,
-      quality: 0.65,
-    });
-    await processImageResult(result);
-  };
-
-  const handleAddPlant = () => {
-    const finalName = customName.trim();
+  const handleSavePlant = () => {
+    const finalName = plantName.trim() || query.trim();
     if (!finalName) {
-      Alert.alert(
-        'Escolha uma planta',
-        'Busque uma espécie na API ou tire uma foto com a IA.'
-      );
+      setModalInfo({
+        visible: true,
+        title: 'Qual é o nome da planta?',
+        message:
+          'Busque uma espécie, tire uma foto ou dê um apelido para adicionar à sua estufa.',
+        tone: 'danger',
+      });
       return;
     }
 
-    const finalSpecies = customSpecies.trim() || 'Espécie doméstica';
-    addPlant({
-      name: `${finalName} (${selectedRoom})`,
-      species: finalSpecies,
-      category:
-        customCategory || inferPlantArchetype(`${finalName} ${finalSpecies}`),
-      location: selectedRoom,
-    });
+    const finalSpecies = species.trim() || finalName;
+    addPlantsBatch([
+      {
+        name: finalName,
+        species: finalSpecies,
+        category: inferPlantArchetype(`${finalName} ${finalSpecies} ${category}`),
+        location,
+        imageUrl: photoUri,
+      },
+    ]);
 
-    setCustomName('');
-    setCustomSpecies('');
-    setAiTip(null);
+    onFinish();
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.heroCard}>
-          <Text style={styles.greeting}>
-            Olá, {currentUser?.name || 'Jardineira'}! 🌱
-          </Text>
-          <Text style={styles.title}>Configure sua Estufa</Text>
-          <Text style={styles.subtitle}>
-            Pesquise qualquer planta doméstica na nossa base botânica ou tire
-            uma foto para a IA identificar.
-          </Text>
-        </View>
-
-        <Text style={styles.sectionTitle}>1. Buscar espécie na API Botânica</Text>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View style={styles.header}>
         <TouchableOpacity
-          style={styles.dropdownTrigger}
-          onPress={() => setDropdownOpen(true)}
-          activeOpacity={0.8}
+          onPress={onFinish}
+          style={[styles.backBtn, { backgroundColor: colors.surface }]}
         >
-          <Text
-            style={[
-              styles.dropdownText,
-              !customName && { color: '#8C857B' },
-            ]}
-          >
-            {customName
-              ? `${customName} • ${customSpecies}`
-              : 'Toque para pesquisar qualquer espécie (ex: Bonsai, Cacto)...'}
-          </Text>
-          <Ionicons name="search" size={19} color="#4A7C59" />
+          <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+          Nova Planta na Estufa
+        </Text>
+        <View style={{ width: 40 }} />
+      </View>
 
-        <View style={styles.aiCard}>
-          <View style={styles.aiHeader}>
-            <Ionicons name="sparkles" size={18} color="#3B6E52" />
-            <Text style={styles.aiTitle}>
-              Ou identifique pela câmera / galeria:
-            </Text>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Identificação por Foto */}
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+            Não sabe a espécie? Envie uma foto
+          </Text>
+          <Text style={[styles.cardSub, { color: colors.textSecondary }]}>
+            A IA identifica a espécie e usa a foto no cartão da sua estufa.
+          </Text>
+
+          {photoUri && (
+            <Image source={{ uri: photoUri }} style={styles.photoPreview} />
+          )}
+
+          <View style={styles.photoBtnRow}>
+            <TouchableOpacity
+              onPress={() => handlePhotoIdentify(true)}
+              style={[
+                styles.photoBtn,
+                { backgroundColor: colors.surfaceAlt },
+              ]}
+            >
+              <Ionicons
+                name="camera-outline"
+                size={18}
+                color={colors.mossPrimary}
+              />
+              <Text
+                style={[styles.photoBtnText, { color: colors.textPrimary }]}
+              >
+                Câmera
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => handlePhotoIdentify(false)}
+              style={[
+                styles.photoBtn,
+                { backgroundColor: colors.surfaceAlt },
+              ]}
+            >
+              <Ionicons
+                name="image-outline"
+                size={18}
+                color={colors.mossPrimary}
+              />
+              <Text
+                style={[styles.photoBtnText, { color: colors.textPrimary }]}
+              >
+                Galeria
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {isIdentifying ? (
+          {identifying && (
             <View style={styles.loadingRow}>
-              <ActivityIndicator color="#3B6E52" />
-              <Text style={styles.loadingText}>
-                Analisando imagem com Gemini Vision...
+              <ActivityIndicator size="small" color={colors.mossPrimary} />
+              <Text
+                style={[styles.loadingText, { color: colors.textSecondary }]}
+              >
+                Identificando espécie pela foto...
               </Text>
             </View>
-          ) : (
-            <View style={styles.photoButtonsRow}>
-              <TouchableOpacity
-                style={styles.cameraBtn}
-                onPress={handleOpenCamera}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="camera" size={18} color="#FFFFFF" />
-                <Text style={styles.cameraBtnText}>Tirar Foto</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.galleryBtn}
-                onPress={handleOpenGallery}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="images" size={18} color="#244233" />
-                <Text style={styles.galleryBtnText}>Galeria</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {aiTip && (
-            <View style={styles.tipBox}>
-              <Text style={styles.tipText}>💡 {aiTip}</Text>
-            </View>
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>2. Cômodo da casa</Text>
-        <View style={styles.roomsWrap}>
-          {ROOM_OPTIONS.map((room) => {
-            const active = selectedRoom === room;
-            return (
-              <TouchableOpacity
-                key={room}
-                onPress={() => setSelectedRoom(room)}
-                style={[styles.roomChip, active && styles.roomChipActive]}
-              >
-                <Text
+        {/* Busca de Espécie Online */}
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>
+            Pesquisar espécie
+          </Text>
+          <View
+            style={[
+              styles.searchBox,
+              { backgroundColor: colors.bg, borderColor: colors.border },
+            ]}
+          >
+            <Ionicons
+              name="search-outline"
+              size={18}
+              color={colors.textSecondary}
+            />
+            <TextInput
+              style={[styles.searchInput, { color: colors.textPrimary }]}
+              placeholder="Ex: Jiboia, Cacto, Bonsai, Orquídea..."
+              placeholderTextColor={colors.textSecondary}
+              value={query}
+              onChangeText={handleSearch}
+            />
+            {searching && (
+              <ActivityIndicator size="small" color={colors.mossPrimary} />
+            )}
+          </View>
+
+          {results.length > 0 && (
+            <View style={styles.resultsList}>
+              {results.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  onPress={() => selectSpeciesOption(item)}
                   style={[
-                    styles.roomChipText,
-                    active && styles.roomChipTextActive,
+                    styles.resultItem,
+                    { borderBottomColor: colors.border },
                   ]}
                 >
-                  {room}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+                  <Text
+                    style={[styles.resultTitle, { color: colors.textPrimary }]}
+                  >
+                    {item.popularName}
+                  </Text>
+                  <Text
+                    style={[styles.resultSub, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {item.scientificName}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+            Apelido da planta
+          </Text>
+          <TextInput
+            style={[
+              styles.textInput,
+              {
+                backgroundColor: colors.bg,
+                color: colors.textPrimary,
+                borderColor: colors.border,
+              },
+            ]}
+            placeholder="Ex: Jiboia da Sala"
+            placeholderTextColor={colors.textSecondary}
+            value={plantName}
+            onChangeText={setPlantName}
+          />
+
+          <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+            Onde ela fica na casa?
+          </Text>
+          <View style={styles.roomChips}>
+            {ROOM_OPTIONS.map((room) => {
+              const active = location === room;
+              return (
+                <TouchableOpacity
+                  key={room}
+                  onPress={() => setLocation(room)}
+                  style={[
+                    styles.roomChip,
+                    {
+                      backgroundColor: active
+                        ? colors.mossPrimary
+                        : colors.surfaceAlt,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12.5,
+                      fontWeight: '700',
+                      color: active ? '#FFFFFF' : colors.textPrimary,
+                    }}
+                  >
+                    {room}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
         <TouchableOpacity
-          style={styles.addBtn}
-          onPress={handleAddPlant}
-          activeOpacity={0.85}
+          onPress={handleSavePlant}
+          style={[styles.saveBtn, { backgroundColor: colors.mossDeep }]}
         >
-          <Ionicons name="add-circle" size={20} color="#FFFFFF" />
-          <Text style={styles.addBtnText}>Adicionar à Estufa (+25 XP)</Text>
-        </TouchableOpacity>
-
-        <View style={styles.summaryBox}>
-          <Text style={styles.summaryTitle}>
-            Plantas de {currentUser?.name} ({plants.length})
+          <Ionicons
+            name="checkmark-circle-outline"
+            size={20}
+            color={profile.darkMode ? '#131E19' : '#FAF7F0'}
+          />
+          <Text
+            style={[
+              styles.saveBtnText,
+              { color: profile.darkMode ? '#131E19' : '#FAF7F0' },
+            ]}
+          >
+            Salvar na Estufa
           </Text>
-          <Text style={styles.summaryList}>
-            {plants.map((p) => p.name).join('  •  ')}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          style={styles.enterBtn}
-          onPress={() => setActiveView('app')}
-          activeOpacity={0.9}
-        >
-          <Text style={styles.enterBtnText}>Ir para a Estufa 🌿</Text>
-          <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Modal de Busca Dinâmica */}
-      <Modal
-        visible={dropdownOpen}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setDropdownOpen(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Busca Botânica Online</Text>
-              <TouchableOpacity onPress={() => setDropdownOpen(false)}>
-                <Ionicons name="close-circle" size={26} color="#6E6A63" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color="#7A746C" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Digite o nome popular (ex: Bonsai, Cacto, Orquídea)..."
-                placeholderTextColor="#9A948C"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoFocus
-              />
-            </View>
-
-            {isSearchingApi ? (
-              <View style={{ padding: 30, alignItems: 'center' }}>
-                <ActivityIndicator color="#3B6E52" />
-                <Text style={{ marginTop: 10, color: '#5E5A52' }}>
-                  Consultando espécies...
-                </Text>
-              </View>
-            ) : (
-              <FlatList
-                data={searchResults}
-                keyExtractor={(item) => item.id}
-                keyboardShouldPersistTaps="handled"
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.catalogRow}
-                    onPress={() => handleSelectResult(item)}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.catalogPopular}>
-                        {item.popularName}
-                      </Text>
-                      <Text style={styles.catalogScientific}>
-                        {item.scientificName}
-                      </Text>
-                    </View>
-                    <View style={styles.categoryTag}>
-                      <Text style={styles.categoryTagText}>
-                        {item.category}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  <View style={styles.emptyBox}>
-                    <Text style={styles.emptyText}>
-                      {searchQuery.trim().length < 2
-                        ? 'Digite pelo menos 2 letras para buscar na API botânica.'
-                        : 'Nenhuma espécie retornada. Você pode cadastrar o nome digitado abaixo:'}
-                    </Text>
-                    {searchQuery.trim().length >= 2 && (
-                      <TouchableOpacity
-                        style={styles.useCustomBtn}
-                        onPress={() => {
-                          setCustomName(searchQuery.trim());
-                          setCustomSpecies('Espécie personalizada');
-                          setCustomCategory(inferPlantArchetype(searchQuery));
-                          setDropdownOpen(false);
-                          setSearchQuery('');
-                        }}
-                      >
-                        <Text style={styles.useCustomBtnText}>
-                          Usar "{searchQuery.trim()}"
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                }
-              />
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      <ScreenTutorialPopup
-        visible={!seenTutorials.onboarding}
-        heading="Monte seu Jardim ✨"
-        onDismiss={() => dismissTutorial('onboarding')}
-        steps={[
-          {
-            icon: 'search',
-            title: 'Busca dinâmica na API',
-            description:
-              'Digite qualquer planta doméstica para buscar nome científico e cuidados automaticamente.',
-          },
-          {
-            icon: 'camera',
-            title: 'Reconhecimento por foto',
-            description:
-              'Não sabe o nome? Tire uma foto da planta que a IA identifica na hora.',
-          },
-        ]}
+      <ThemedModal
+        visible={modalInfo.visible}
+        title={modalInfo.title}
+        message={modalInfo.message}
+        tone={modalInfo.tone}
+        isDark={profile.darkMode}
+        confirmLabel="Entendi"
+        onConfirm={() => setModalInfo((p) => ({ ...p, visible: false }))}
       />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F6F3EC' },
-  scroll: { padding: 22, paddingBottom: 40 },
-  heroCard: {
-    backgroundColor: '#244233',
-    borderRadius: 28,
-    padding: 22,
-    marginBottom: 20,
-  },
-  greeting: { fontSize: 13, fontWeight: '800', color: '#BCE3C8', marginBottom: 4 },
-  title: { fontSize: 24, fontWeight: '800', color: '#FFFFFF' },
-  subtitle: { fontSize: 13.5, color: '#D4E6DA', marginTop: 6, lineHeight: 20 },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#244233', marginBottom: 10 },
-  dropdownTrigger: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+  container: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 15,
-    borderWidth: 1.5,
-    borderColor: '#DCE5DD',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
+    paddingVertical: 12,
   },
-  dropdownText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#244233', marginRight: 8 },
-  aiCard: {
-    backgroundColor: '#E7F2EA',
+  backBtn: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#C5DEC9',
-    marginBottom: 20,
-  },
-  aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-  aiTitle: { fontSize: 14, fontWeight: '700', color: '#244233', flex: 1 },
-  photoButtonsRow: { flexDirection: 'row', gap: 10 },
-  cameraBtn: {
-    flex: 1,
-    backgroundColor: '#3B6E52',
-    borderRadius: 14,
-    paddingVertical: 12,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
-  cameraBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
-  galleryBtn: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+  headerTitle: { fontSize: 17, fontWeight: '800' },
+  content: { padding: 16, paddingBottom: 36, gap: 14 },
+  card: {
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: '#C5DEC9',
+    padding: 18,
   },
-  galleryBtnText: { color: '#244233', fontWeight: '700', fontSize: 14 },
-  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
-  loadingText: { fontSize: 13, color: '#244233', fontWeight: '600', flex: 1 },
-  tipBox: { marginTop: 12, backgroundColor: '#FFFFFF', padding: 10, borderRadius: 12 },
-  tipText: { fontSize: 12.5, color: '#244233', fontWeight: '600' },
-  roomsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
-  roomChip: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E2DDD2',
-  },
-  roomChipActive: { backgroundColor: '#D97B59', borderColor: '#D97B59' },
-  roomChipText: { fontSize: 13, fontWeight: '600', color: '#5A554E' },
-  roomChipTextActive: { color: '#FFFFFF' },
-  addBtn: {
-    backgroundColor: '#4A7C59',
+  cardTitle: { fontSize: 15.5, fontWeight: '800', marginBottom: 4 },
+  cardSub: { fontSize: 12.5, lineHeight: 18, marginBottom: 14 },
+  photoPreview: {
+    width: '100%',
+    height: 160,
     borderRadius: 16,
-    paddingVertical: 14,
+    marginBottom: 12,
+  },
+  photoBtnRow: { flexDirection: 'row', gap: 10 },
+  photoBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginBottom: 18,
+    paddingVertical: 12,
+    borderRadius: 14,
   },
-  addBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
-  summaryBox: { backgroundColor: '#EFECE4', borderRadius: 16, padding: 14, marginBottom: 18 },
-  summaryTitle: { fontSize: 13, fontWeight: '700', color: '#244233', marginBottom: 4 },
-  summaryList: { fontSize: 12.5, color: '#5E5951', lineHeight: 18 },
-  enterBtn: {
-    backgroundColor: '#244233',
-    borderRadius: 20,
-    paddingVertical: 17,
+  photoBtnText: { fontSize: 13.5, fontWeight: '700' },
+  loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
+    gap: 8,
+    marginTop: 12,
   },
-  enterBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(20, 30, 24, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalSheet: {
-    backgroundColor: '#F6F3EC',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    height: '82%',
-    padding: 20,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  modalTitle: { fontSize: 19, fontWeight: '800', color: '#244233' },
-  searchBar: {
+  loadingText: { fontSize: 12.5 },
+  searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  searchInput: { flex: 1, fontSize: 14 },
+  resultsList: { marginTop: 8 },
+  resultItem: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  resultTitle: { fontSize: 14, fontWeight: '700' },
+  resultSub: { fontSize: 12, marginTop: 2 },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  textInput: {
+    borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 14,
-    height: 48,
-    gap: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#DCE5DD',
-  },
-  searchInput: { flex: 1, fontSize: 14.5, color: '#244233' },
-  catalogRow: {
-    backgroundColor: '#FFFFFF',
-    padding: 14,
-    borderRadius: 14,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  catalogPopular: { fontSize: 15, fontWeight: '700', color: '#244233' },
-  catalogScientific: { fontSize: 12, fontStyle: 'italic', color: '#7A746C', marginTop: 2 },
-  categoryTag: {
-    backgroundColor: '#E7F2EA',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 99,
-  },
-  categoryTagText: { fontSize: 11, fontWeight: '700', color: '#3B6E52', textTransform: 'capitalize' },
-  emptyBox: { padding: 24, alignItems: 'center' },
-  emptyText: { textAlign: 'center', color: '#6E6A63', fontSize: 13.5, marginBottom: 14 },
-  useCustomBtn: {
-    backgroundColor: '#3B6E52',
-    paddingHorizontal: 18,
     paddingVertical: 11,
+    fontSize: 14,
+  },
+  roomChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  roomChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 12,
   },
-  useCustomBtnText: { color: '#FFFFFF', fontWeight: '700' },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    borderRadius: 18,
+    marginTop: 4,
+  },
+  saveBtnText: { fontSize: 15.5, fontWeight: '800' },
 });
