@@ -4,326 +4,376 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  ScrollView,
+  FlatList,
   Image,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { consultBotanistAI } from '../services/geminiService';
-
-interface Message {
-  id: string;
-  sender: 'user' | 'ai';
-  text: string;
-  imageUri?: string;
-}
+import { usePlantStore, ChatMessage } from '../store/usePlantStore';
+import { analyzePlantWithGemini } from '../services/geminiService';
+import { PALETTES } from '../theme/theme';
+import { ThemedModal } from '../components/ThemedModal';
 
 export const AIConsultScreen: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      sender: 'ai',
-      text: 'Olá! Sou o BotanIA 🌿\nTire uma foto agora ou envie da galeria para eu identificar sua planta ou ajudar com folhas secas, manchas e rega.',
-    },
-  ]);
+  const messages = usePlantStore((s) => s.chatHistory);
+  const appendChatMessage = usePlantStore((s) => s.appendChatMessage);
+  const clearChatHistory = usePlantStore((s) => s.clearChatHistory);
+  const profile = usePlantStore((s) => s.profile);
+
   const [inputText, setInputText] = useState('');
-  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
-  const [selectedImageBase64, setSelectedImageBase64] = useState<string | null>(null);
-  const [isSending, setIsSending] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<{
+    uri: string;
+    base64: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const listRef = useRef<FlatList<ChatMessage>>(null);
 
-  const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
+  const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
 
-  const handleTakePhoto = async () => {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permissão necessária', 'Autorize o uso da câmera.');
-      return;
-    }
-    const res = await ImagePicker.launchCameraAsync({
+  const pickImage = async (fromCamera: boolean) => {
+    const fn = fromCamera
+      ? ImagePicker.launchCameraAsync
+      : ImagePicker.launchImageLibraryAsync;
+
+    const result = await fn({
       mediaTypes: ['images'],
       base64: true,
       quality: 0.65,
     });
-    if (!res.canceled && res.assets[0]) {
-      setSelectedImageUri(res.assets[0].uri);
-      setSelectedImageBase64(res.assets[0].base64 || null);
-    }
-  };
 
-  const handlePickGallery = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Permissão necessária', 'Autorize o acesso à galeria.');
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      base64: true,
-      quality: 0.65,
-    });
-    if (!res.canceled && res.assets[0]) {
-      setSelectedImageUri(res.assets[0].uri);
-      setSelectedImageBase64(res.assets[0].base64 || null);
+    if (!result.canceled && result.assets[0]?.base64) {
+      setSelectedImage({
+        uri: result.assets[0].uri,
+        base64: result.assets[0].base64,
+      });
     }
   };
 
   const handleSend = async () => {
     const trimmed = inputText.trim();
-    if (!trimmed && !selectedImageBase64) return;
+    if (!trimmed && !selectedImage) return;
+    if (loading) return;
 
-    const userMsg: Message = {
-      id: Date.now().toString(),
-      sender: 'user',
-      text: trimmed || 'Pode analisar esta planta para mim?',
-      imageUri: selectedImageUri || undefined,
+    const nowLabel = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const userMsg: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text: trimmed || 'Analise a foto desta planta, por favor.',
+      imageUri: selectedImage?.uri,
+      timestamp: nowLabel,
     };
 
-    const base64ToSend = selectedImageBase64;
-    setMessages((prev) => [...prev, userMsg]);
+    const imgBase64 = selectedImage?.base64;
+    appendChatMessage(userMsg);
     setInputText('');
-    setSelectedImageUri(null);
-    setSelectedImageBase64(null);
-    setIsSending(true);
+    setSelectedImage(null);
+    setLoading(true);
 
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    const replyText = await analyzePlantWithGemini(trimmed, imgBase64);
 
-    const reply = await consultBotanistAI(base64ToSend, userMsg.text);
+    appendChatMessage({
+      id: `ai-${Date.now()}`,
+      role: 'ai',
+      text: replyText,
+      timestamp: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    });
 
-    const aiMsg: Message = {
-      id: (Date.now() + 1).toString(),
-      sender: 'ai',
-      text: reply,
-    };
-
-    setMessages((prev) => [...prev, aiMsg]);
-    setIsSending(false);
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 150);
+    setLoading(false);
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerIcon}>
-          <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+        ]}
+      >
+        <View style={styles.headerLeft}>
+          <View
+            style={[
+              styles.aiAvatar,
+              { backgroundColor: colors.mossPrimary },
+            ]}
+          >
+            <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+          </View>
+          <View>
+            <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+              Consultoria Botânica
+            </Text>
+            <Text style={[styles.headerSub, { color: colors.textSecondary }]}>
+              Diagnóstico Multimodal • Gemini 2.5
+            </Text>
+          </View>
         </View>
-        <View>
-          <Text style={styles.headerTitle}>Consultoria Botânica</Text>
-          <Text style={styles.headerSubtitle}>
-            Visão Multimodal • Gemini 2.5 Flash
-          </Text>
-        </View>
+
+        <TouchableOpacity
+          onPress={() => setConfirmClear(true)}
+          style={[styles.clearBtn, { backgroundColor: colors.surfaceAlt }]}
+        >
+          <Ionicons
+            name="trash-outline"
+            size={18}
+            color={colors.textSecondary}
+          />
+        </TouchableOpacity>
       </View>
 
-      {/* KeyboardAvoidingView garante que a caixa de texto suba acima do teclado */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 25}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
       >
-        <ScrollView
-          ref={scrollRef}
-          style={{ flex: 1 }}
-          contentContainerStyle={styles.chatContent}
-          keyboardShouldPersistTaps="handled"
+        <FlatList
+          ref={listRef}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
           onContentSizeChange={() =>
-            scrollRef.current?.scrollToEnd({ animated: true })
+            listRef.current?.scrollToEnd({ animated: true })
           }
-        >
-          {messages.map((msg) => {
-            const isUser = msg.sender === 'user';
+          renderItem={({ item }) => {
+            const isUser = item.role === 'user';
             return (
               <View
-                key={msg.id}
                 style={[
                   styles.bubbleWrapper,
-                  isUser ? styles.alignRight : styles.alignLeft,
+                  { alignItems: isUser ? 'flex-end' : 'flex-start' },
                 ]}
               >
                 <View
                   style={[
                     styles.bubble,
-                    isUser ? styles.userBubble : styles.aiBubble,
+                    isUser
+                      ? { backgroundColor: colors.mossPrimary }
+                      : {
+                          backgroundColor: colors.surface,
+                          borderColor: colors.border,
+                          borderWidth: 1,
+                        },
                   ]}
                 >
-                  {msg.imageUri && (
+                  {item.imageUri && (
                     <Image
-                      source={{ uri: msg.imageUri }}
-                      style={styles.chatImage}
+                      source={{ uri: item.imageUri }}
+                      style={styles.msgImage}
                     />
                   )}
                   <Text
                     style={[
-                      styles.bubbleText,
-                      isUser ? styles.userText : styles.aiText,
+                      styles.msgText,
+                      { color: isUser ? '#FFFFFF' : colors.textPrimary },
                     ]}
                   >
-                    {msg.text}
+                    {item.text}
                   </Text>
                 </View>
+                <Text
+                  style={[styles.timestamp, { color: colors.textSecondary }]}
+                >
+                  {item.timestamp}
+                </Text>
               </View>
             );
-          })}
+          }}
+        />
 
-          {isSending && (
-            <View style={[styles.bubbleWrapper, styles.alignLeft]}>
-              <View style={[styles.bubble, styles.aiBubble, styles.typingRow]}>
-                <ActivityIndicator size="small" color="#3B6E52" />
-                <Text style={styles.typingText}>Analisando...</Text>
-              </View>
-            </View>
-          )}
-        </ScrollView>
+        {loading && (
+          <View style={styles.typingBar}>
+            <ActivityIndicator size="small" color={colors.mossPrimary} />
+            <Text style={[styles.typingText, { color: colors.textSecondary }]}>
+              Analisando folhas e condições...
+            </Text>
+          </View>
+        )}
 
-        {/* Preview da imagem anexada */}
-        {selectedImageUri && (
-          <View style={styles.previewBar}>
+        {selectedImage && (
+          <View
+            style={[
+              styles.previewStrip,
+              { backgroundColor: colors.surfaceAlt },
+            ]}
+          >
             <Image
-              source={{ uri: selectedImageUri }}
+              source={{ uri: selectedImage.uri }}
               style={styles.previewThumb}
             />
-            <Text style={styles.previewLabel}>Foto pronta para envio</Text>
-            <TouchableOpacity
-              onPress={() => {
-                setSelectedImageUri(null);
-                setSelectedImageBase64(null);
-              }}
+            <Text
+              style={[styles.previewLabel, { color: colors.textPrimary }]}
             >
-              <Ionicons name="close-circle" size={22} color="#C85A43" />
+              Foto anexada para diagnóstico
+            </Text>
+            <TouchableOpacity onPress={() => setSelectedImage(null)}>
+              <Ionicons
+                name="close-circle"
+                size={22}
+                color={colors.terracotta}
+              />
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Caixa de Entrada */}
-        <View style={styles.inputBar}>
+        <View
+          style={[
+            styles.inputBar,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
           <TouchableOpacity
-            style={styles.mediaBtn}
-            onPress={handleTakePhoto}
-            activeOpacity={0.8}
+            onPress={() => pickImage(true)}
+            style={[styles.mediaBtn, { backgroundColor: colors.surfaceAlt }]}
           >
-            <Ionicons name="camera" size={20} color="#244233" />
+            <Ionicons
+              name="camera-outline"
+              size={20}
+              color={colors.mossPrimary}
+            />
           </TouchableOpacity>
-
           <TouchableOpacity
-            style={styles.mediaBtn}
-            onPress={handlePickGallery}
-            activeOpacity={0.8}
+            onPress={() => pickImage(false)}
+            style={[styles.mediaBtn, { backgroundColor: colors.surfaceAlt }]}
           >
-            <Ionicons name="image" size={20} color="#244233" />
+            <Ionicons
+              name="image-outline"
+              size={20}
+              color={colors.mossPrimary}
+            />
           </TouchableOpacity>
 
           <TextInput
-            style={styles.textInput}
-            placeholder="Pergunte sobre sua planta..."
-            placeholderTextColor="#8E8980"
+            style={[
+              styles.input,
+              {
+                backgroundColor: colors.bg,
+                color: colors.textPrimary,
+              },
+            ]}
+            placeholder="Descreva sua dúvida botânica..."
+            placeholderTextColor={colors.textSecondary}
             value={inputText}
             onChangeText={setInputText}
-            multiline
           />
 
           <TouchableOpacity
-            style={styles.sendBtn}
             onPress={handleSend}
-            disabled={isSending}
-            activeOpacity={0.85}
+            style={[
+              styles.sendBtn,
+              { backgroundColor: colors.mossPrimary },
+            ]}
           >
-            <Ionicons name="send" size={18} color="#FFFFFF" />
+            <Ionicons name="send" size={17} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <ThemedModal
+        visible={confirmClear}
+        title="Limpar histórico do chat?"
+        message="As mensagens anteriores desta consultoria serão apagadas."
+        icon="chatbubble-ellipses-outline"
+        tone="danger"
+        isDark={profile.darkMode}
+        cancelLabel="Cancelar"
+        onConfirm={() => {
+          clearChatHistory();
+          setConfirmClear(false);
+        }}
+        onCancel={() => setConfirmClear(false)}
+      />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F6F3EC' },
+  container: { flex: 1 },
   header: {
-    backgroundColor: '#244233',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
   },
-  headerIcon: {
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  aiAvatar: {
     width: 38,
     height: 38,
-    borderRadius: 12,
-    backgroundColor: '#4E9463',
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
-  headerSubtitle: { fontSize: 12, color: '#BCE3C8' },
-  chatContent: { padding: 16, paddingBottom: 20, gap: 12 },
-  bubbleWrapper: { width: '100%' },
-  alignRight: { alignItems: 'flex-end' },
-  alignLeft: { alignItems: 'flex-start' },
-  bubble: { maxWidth: '84%', borderRadius: 20, padding: 14 },
-  userBubble: { backgroundColor: '#3B6E52', borderBottomRightRadius: 4 },
-  aiBubble: {
-    backgroundColor: '#FFFFFF',
-    borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: '#E4ECE5',
+  headerTitle: { fontSize: 16, fontWeight: '800' },
+  headerSub: { fontSize: 11.5 },
+  clearBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  chatImage: { width: 200, height: 150, borderRadius: 12, marginBottom: 8 },
-  bubbleText: { fontSize: 14.5, lineHeight: 21 },
-  userText: { color: '#FFFFFF' },
-  aiText: { color: '#244233' },
-  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  typingText: { fontSize: 13, color: '#3B6E52', fontWeight: '600' },
-  previewBar: {
+  listContent: { padding: 16, paddingBottom: 20 },
+  bubbleWrapper: { marginBottom: 14 },
+  bubble: { maxWidth: '84%', borderRadius: 20, padding: 14 },
+  msgImage: { width: 200, height: 150, borderRadius: 12, marginBottom: 8 },
+  msgText: { fontSize: 14, lineHeight: 20 },
+  timestamp: { fontSize: 10.5, marginTop: 4, marginHorizontal: 4 },
+  typingBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#E7F2EA',
+    gap: 8,
+    paddingHorizontal: 18,
+    paddingBottom: 8,
+  },
+  typingText: { fontSize: 12 },
+  previewStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    gap: 10,
   },
-  previewThumb: { width: 40, height: 40, borderRadius: 8 },
-  previewLabel: { flex: 1, fontSize: 12.5, fontWeight: '700', color: '#244233' },
+  previewThumb: { width: 38, height: 38, borderRadius: 8 },
+  previewLabel: { flex: 1, fontSize: 12.5, fontWeight: '600' },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    paddingBottom: Platform.OS === 'android' ? 14 : 10,
     borderTopWidth: 1,
-    borderTopColor: '#E4ECE5',
-    gap: 8,
   },
   mediaBtn: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: 12,
-    backgroundColor: '#F0EDE6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  textInput: {
+  input: {
     flex: 1,
-    minHeight: 42,
-    maxHeight: 100,
-    backgroundColor: '#F6F3EC',
-    borderRadius: 16,
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    fontSize: 14.5,
-    color: '#244233',
+    fontSize: 14,
   },
   sendBtn: {
-    width: 42,
-    height: 42,
+    width: 40,
+    height: 40,
     borderRadius: 14,
-    backgroundColor: '#4E9463',
     alignItems: 'center',
     justifyContent: 'center',
   },
