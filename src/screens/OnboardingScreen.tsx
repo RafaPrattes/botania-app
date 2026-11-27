@@ -21,7 +21,11 @@ import {
   PlantCatalogOption,
   PlantArchetype,
 } from '../services/plantSpeciesService';
-import { identifyPlantFromPhoto } from '../services/geminiService';
+import {
+  identifyPlantFromPhoto,
+  generateGhibliPlantArt,
+  normalizeSpeciesKey,
+} from '../services/geminiService';
 import { PALETTES } from '../theme/theme';
 import { ThemedModal } from '../components/ThemedModal';
 
@@ -34,7 +38,7 @@ const ROOM_OPTIONS = [
   'Varanda',
   'Quarto',
   'Cozinha',
-  'Escrivaninha',
+  'Banheiro',
 ];
 
 const CATEGORY_LABELS: Record<PlantArchetype, string> = {
@@ -52,6 +56,10 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
   const addPlantsBatch = usePlantStore((s) => s.addPlantsBatch);
   const profile = usePlantStore((s) => s.profile);
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
+
+  const speciesArtCache = usePlantStore((s) => s.speciesArtCache);
+  const setSpeciesArt = usePlantStore((s) => s.setSpeciesArt);
+
 
   const scrollRef = useRef<React.ElementRef<typeof ScrollView>>(null);
 
@@ -191,9 +199,16 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
         species: finalSpecies,
         category: inferPlantArchetype(`${finalName} ${finalSpecies} ${category}`),
         location,
-        // Não salvamos a foto real no card para preservar 100% a imersão ilustrada Ghibli
       },
     ]);
+
+     const key = normalizeSpeciesKey(finalSpecies);
+    if (!speciesArtCache[key]) {
+      // Gera a ilustração Ghibli da nova espécie em segundo plano e salva em cache local
+      generateGhibliPlantArt(finalSpecies).then((uri) => {
+        if (uri) setSpeciesArt(finalSpecies, uri);
+      });
+    }
 
     onFinish();
   };

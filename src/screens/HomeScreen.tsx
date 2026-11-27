@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   FlatList,
   StyleSheet,
-  ImageBackground,
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -74,12 +73,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       edges={['top']}
     >
       {/* Banner Ilustrado Cozy da Estufa */}
-      <ImageBackground
-        source={require('../../assets/ghibli/greenhouse_bg.png')}
-        style={styles.heroBanner}
-        imageStyle={styles.heroImage}
-        resizeMode="cover"
-      >
+      <View style={styles.heroBanner}>
+        <Image
+          source={require('../../assets/ghibli/greenhouse_bg.png')}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+        />
         <View style={styles.heroOverlay}>
           {/* Top bar minimalista: Perfil à esquerda, Áudio suave à direita */}
           <View style={styles.topBar}>
@@ -148,7 +147,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </View>
           </View>
         </View>
-      </ImageBackground>
+      </View>
 
       {/* Barra de Ações Editoriais (separada do áudio) */}
       <View style={styles.actionsStrip}>
@@ -286,9 +285,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <PlantIllustration
                   category={item.category}
                   species={item.species}
-                  imageUrl={item.imageUrl}
                   isLowHp={isLowHp}
                   size="small"
+                  generatedArtUri={item.generatedArtUri}
                 />
 
                 <View style={styles.plantInfo}>
@@ -319,7 +318,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         { color: colors.mossMuted },
                       ]}
                     >
-                      Rega: {getNextWateringLabel(item.category, item.lastWateredAt)}
+                      Rega: {getNextWateringLabel(item.category, item.lastWateredAt, profile.language)}
                     </Text>
                   </View>
                 </View>
@@ -425,9 +424,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     borderRadius: 26,
     overflow: 'hidden',
-  },
-  heroImage: {
-    borderRadius: 26,
   },
   heroOverlay: {
     flex: 1,

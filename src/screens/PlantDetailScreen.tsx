@@ -5,16 +5,25 @@ import {
   TouchableOpacity,
   StyleSheet,
   ImageBackground,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
-import { PlantIllustration } from '../components/PlantIllustration';
+import {
+  PlantIllustration,
+  LOCAL_GHIBLI_ASSETS,
+} from '../components/PlantIllustration';
+import {
+  generateGhibliPlantArt,
+  normalizeSpeciesKey,
+} from '../services/geminiService';
 import { PALETTES, TRANSLATIONS } from '../theme/theme';
 import {
   formatRelativeDate,
   getNextWateringLabel,
 } from '../utils/wateringSchedule';
+import { ThemedModal } from '../components/ThemedModal';
 
 interface PlantDetailScreenProps {
   plantId: string;
@@ -30,7 +39,17 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const plants = usePlantStore((s) => s.plants);
   const waterPlant = usePlantStore((s) => s.waterPlant);
   const profile = usePlantStore((s) => s.profile);
+  const speciesArtCache = usePlantStore((s) => s.speciesArtCache);
+  const setSpeciesArt = usePlantStore((s) => s.setSpeciesArt);
+
   const [isWatering, setIsWatering] = useState(false);
+  const [generatingArt, setGeneratingArt] = useState(false);
+  const [modalInfo, setModalInfo] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    tone: 'default' | 'danger' | 'success';
+  }>({ visible: false, title: '', message: '', tone: 'default' });
 
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
   const t = TRANSLATIONS[profile.language];
@@ -40,6 +59,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   if (!plant) return null;
 
   const isLowHp = plant.hp <= 40;
+  const speciesKey = normalizeSpeciesKey(plant.species || plant.name);
+  const resolvedGeneratedArt =
+    plant.generatedArtUri || speciesArtCache[speciesKey];
+  const hasLocalPng = Boolean(LOCAL_GHIBLI_ASSETS[plant.category]);
+
   const prevPlant =
     plants.length > 1
       ? plants[(currentIndex - 1 + plants.length) % plants.length]
@@ -53,7 +77,31 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
     setTimeout(() => {
       waterPlant(plant.id);
       setIsWatering(false);
-    }, 900);
+    }, 850);
+  };
+
+  const handleGenerateArt = async () => {
+    if (generatingArt) return;
+    setGeneratingArt(true);
+    const uri = await generateGhibliPlantArt(plant.species || plant.name);
+    setGeneratingArt(false);
+
+    if (uri) {
+      setSpeciesArt(plant.species || plant.name, uri);
+      setModalInfo({
+        visible: true,
+        title: t.artGeneratedTitle,
+        message: t.artGeneratedMsg,
+        tone: 'success',
+      });
+    } else {
+      setModalInfo({
+        visible: true,
+        title: t.artErrorTitle,
+        message: t.artErrorMsg,
+        tone: 'danger',
+      });
+    }
   };
 
   return (
@@ -75,49 +123,87 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
         </View>
       </View>
 
-      {/* Palco da Janela Ghibli: o parapeito pintado da imagem é a prateleira */}
-      <ImageBackground
-        source={require('../../assets/ghibli/greenhouse_bg.png')}
-        style={styles.shelfStage}
-        imageStyle={{ opacity: profile.darkMode ? 0.55 : 0.96 }}
-        resizeMode="cover"
-      >
-        <View style={styles.stageRow}>
-          {prevPlant ? (
-            <TouchableOpacity
-              onPress={() => onSelectPlant(prevPlant.id)}
-              style={styles.navArrow}
+      {/* PALCO VISUAL LIMPO:
+          - Se tiver arte completa gerada por IA -> ocupa o palco inteiro sem sobreposição.
+          - Se for PNG recortado ou placeholder -> fundo Ghibli desfocado (depth of field) + apoio limpo. */}
+      <View style={styles.stageContainer}>
+        {resolvedGeneratedArt ? (
+          <PlantIllustration
+            category={plant.category}
+            species={plant.species}
+            generatedArtUri={resolvedGeneratedArt}
+            isLowHp={isLowHp}
+            size="large"
+          />
+        ) : (
+          <ImageBackground
+            source={require('../../assets/ghibli/greenhouse_bg.png')}
+            style={styles.blurredBackdrop}
+            blurRadius={8}
+            resizeMode="cover"
+          >
+            <View
+              style={[
+                styles.softVeil,
+                {
+                  backgroundColor: profile.darkMode
+                    ? 'rgba(18, 30, 24, 0.45)'
+                    : 'rgba(244, 241, 234, 0.32)',
+                },
+              ]}
             >
-              <Ionicons name="chevron-back" size={22} color="#1E352B" />
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: 38 }} />
-          )}
+              <View style={styles.heroPlantBox}>
+                <PlantIllustration
+                  category={plant.category}
+                  species={plant.species}
+                  isLowHp={isLowHp}
+                  size="large"
+                />
+                {hasLocalPng && <View style={styles.groundShadow} />}
+              </View>
+              <View style={styles.cleanShelf} />
+            </View>
+          </ImageBackground>
+        )}
 
-          {/* Dica: se quiser subir ou descer 10px no parapeito, ajuste paddingBottom em shelfStage */}
-          <View style={styles.plantCenter}>
-            <PlantIllustration
-              category={plant.category}
-              species={plant.species}
-              isLowHp={isLowHp}
-              size="large"
-            />
-          </View>
+        {/* Setas laterais flutuantes limpas */}
+        {prevPlant && (
+          <TouchableOpacity
+            onPress={() => onSelectPlant(prevPlant.id)}
+            style={[styles.navArrow, styles.navLeft]}
+          >
+            <Ionicons name="chevron-back" size={20} color="#1E352B" />
+          </TouchableOpacity>
+        )}
+        {nextPlant && (
+          <TouchableOpacity
+            onPress={() => onSelectPlant(nextPlant.id)}
+            style={[styles.navArrow, styles.navRight]}
+          >
+            <Ionicons name="chevron-forward" size={20} color="#1E352B" />
+          </TouchableOpacity>
+        )}
 
-          {nextPlant ? (
-            <TouchableOpacity
-              onPress={() => onSelectPlant(nextPlant.id)}
-              style={styles.navArrow}
-            >
-              <Ionicons name="chevron-forward" size={22} color="#1E352B" />
-            </TouchableOpacity>
-          ) : (
-            <View style={{ width: 38 }} />
-          )}
-        </View>
-      </ImageBackground>
+        {/* Botão discreto para pintar a cena Ghibli exclusiva desta espécie com IA */}
+        {!resolvedGeneratedArt && (
+          <TouchableOpacity
+            onPress={handleGenerateArt}
+            disabled={generatingArt}
+            style={styles.genArtPill}
+          >
+            {generatingArt ? (
+              <ActivityIndicator size="small" color="#FAF7F0" />
+            ) : (
+              <Ionicons name="sparkles" size={14} color="#FAF7F0" />
+            )}
+            <Text style={styles.genArtText}>
+              {generatingArt ? t.generatingArt : t.generateArt}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
-      {/* Painel Inferior */}
+      {/* Painel Inferior 100% Traduzido */}
       <View
         style={[
           styles.bottomPanel,
@@ -132,7 +218,8 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
               color={colors.mossPrimary}
             />
             <Text style={[styles.infoPillText, { color: colors.textPrimary }]}>
-              {t.lastWatered}: {formatRelativeDate(plant.lastWateredAt)}
+              {t.lastWatered}:{' '}
+              {formatRelativeDate(plant.lastWateredAt, profile.language)}
             </Text>
           </View>
 
@@ -144,14 +231,18 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
             />
             <Text style={[styles.infoPillText, { color: colors.textPrimary }]}>
               {t.nextWatering}:{' '}
-              {getNextWateringLabel(plant.category, plant.lastWateredAt)}
+              {getNextWateringLabel(
+                plant.category,
+                plant.lastWateredAt,
+                profile.language
+              )}
             </Text>
           </View>
         </View>
 
         <View style={styles.hpHeader}>
           <Text style={[styles.hpStatus, { color: colors.textPrimary }]}>
-            {isLowHp ? 'Solo seco' : 'Umidade equilibrada'}
+            {isLowHp ? t.drySoil : t.balancedMoisture}
           </Text>
           <Text
             style={[
@@ -207,11 +298,21 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
             {plant.hp >= plant.maxHp
               ? t.hydrated
               : isWatering
-              ? 'Regando...'
+              ? t.watering
               : `${t.waterNow} (+10 XP)`}
           </Text>
         </TouchableOpacity>
       </View>
+
+      <ThemedModal
+        visible={modalInfo.visible}
+        title={modalInfo.title}
+        message={modalInfo.message}
+        tone={modalInfo.tone}
+        isDark={profile.darkMode}
+        confirmLabel="OK"
+        onConfirm={() => setModalInfo((p) => ({ ...p, visible: false }))}
+      />
     </SafeAreaView>
   );
 };
@@ -223,7 +324,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingVertical: 10,
   },
   roundBtn: {
     width: 40,
@@ -234,40 +335,84 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 19, fontWeight: '800' },
   subtitle: { fontSize: 12, marginTop: 2 },
-  shelfStage: {
+  stageContainer: {
+    flex: 1,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    borderRadius: 28,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  blurredBackdrop: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  softVeil: {
     flex: 1,
     justifyContent: 'flex-end',
     alignItems: 'center',
-    paddingBottom: 26,
+    paddingBottom: 24,
   },
-  stageRow: {
-    width: '100%',
-    flexDirection: 'row',
+  heroPlantBox: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 10,
+    justifyContent: 'flex-end',
+    marginBottom: -6,
+    zIndex: 2,
+  },
+  groundShadow: {
+    width: 150,
+    height: 16,
+    borderRadius: 50,
+    backgroundColor: 'rgba(20, 30, 24, 0.28)',
+    marginTop: -12,
+  },
+  cleanShelf: {
+    width: '84%',
+    height: 14,
+    borderRadius: 8,
+    backgroundColor: '#7A563B',
+    borderTopWidth: 2,
+    borderTopColor: '#9E7353',
   },
   navArrow: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.88)',
+    position: 'absolute',
+    top: '48%',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(250, 247, 240, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 5,
+    zIndex: 10,
   },
-  plantCenter: {
-    flex: 1,
+  navLeft: { left: 12 },
+  navRight: { right: 12 },
+  genArtPill: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    gap: 6,
+    backgroundColor: 'rgba(30, 53, 43, 0.82)',
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 18,
+    zIndex: 10,
+  },
+  genArtText: {
+    color: '#FAF7F0',
+    fontSize: 12,
+    fontWeight: '700',
   },
   bottomPanel: {
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     borderTopWidth: 1,
-    padding: 22,
+    padding: 20,
   },
-  reminderRow: { gap: 8, marginBottom: 16 },
+  reminderRow: { gap: 8, marginBottom: 14 },
   infoPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -288,7 +433,7 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     overflow: 'hidden',
-    marginBottom: 18,
+    marginBottom: 16,
   },
   hpFill: { height: '100%', borderRadius: 5 },
   waterBtn: {

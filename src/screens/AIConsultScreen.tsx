@@ -16,7 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore, ChatMessage } from '../store/usePlantStore';
 import { analyzePlantWithGemini } from '../services/geminiService';
-import { PALETTES } from '../theme/theme';
+import { PALETTES, TRANSLATIONS } from '../theme/theme';
 import { ThemedModal } from '../components/ThemedModal';
 
 export const AIConsultScreen: React.FC = () => {
@@ -35,6 +35,18 @@ export const AIConsultScreen: React.FC = () => {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
+  const t = TRANSLATIONS[profile.language];
+
+  // Mensagem inicial sempre renderizada no idioma atual do usuário
+  const displayMessages: ChatMessage[] = [
+    {
+      id: 'localized-welcome',
+      role: 'ai',
+      text: t.aiWelcome,
+      timestamp: t.now,
+    },
+    ...messages.filter((m) => m.id !== 'welcome-1'),
+  ];
 
   const pickImage = async (fromCamera: boolean) => {
     const fn = fromCamera
@@ -68,7 +80,7 @@ export const AIConsultScreen: React.FC = () => {
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
-      text: trimmed || 'Analise a foto desta planta, por favor.',
+      text: trimmed || t.aiPhotoAttached,
       imageUri: selectedImage?.uri,
       timestamp: nowLabel,
     };
@@ -79,7 +91,11 @@ export const AIConsultScreen: React.FC = () => {
     setSelectedImage(null);
     setLoading(true);
 
-    const replyText = await analyzePlantWithGemini(trimmed, imgBase64);
+    const replyText = await analyzePlantWithGemini(
+      trimmed,
+      imgBase64,
+      profile.language
+    );
 
     appendChatMessage({
       id: `ai-${Date.now()}`,
@@ -104,19 +120,16 @@ export const AIConsultScreen: React.FC = () => {
       >
         <View style={styles.headerLeft}>
           <View
-            style={[
-              styles.aiAvatar,
-              { backgroundColor: colors.mossPrimary },
-            ]}
+            style={[styles.aiAvatar, { backgroundColor: colors.mossPrimary }]}
           >
             <Ionicons name="sparkles" size={18} color="#FFFFFF" />
           </View>
           <View>
             <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
-              Consultoria Botânica
+              {t.aiTitle}
             </Text>
             <Text style={[styles.headerSub, { color: colors.textSecondary }]}>
-              Diagnóstico Multimodal • Gemini 2.5
+              {t.aiSub}
             </Text>
           </View>
         </View>
@@ -140,7 +153,7 @@ export const AIConsultScreen: React.FC = () => {
       >
         <FlatList
           ref={listRef}
-          data={messages}
+          data={displayMessages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           onContentSizeChange={() =>
@@ -196,7 +209,7 @@ export const AIConsultScreen: React.FC = () => {
           <View style={styles.typingBar}>
             <ActivityIndicator size="small" color={colors.mossPrimary} />
             <Text style={[styles.typingText, { color: colors.textSecondary }]}>
-              Analisando folhas e condições...
+              {t.aiTyping}
             </Text>
           </View>
         )}
@@ -212,10 +225,8 @@ export const AIConsultScreen: React.FC = () => {
               source={{ uri: selectedImage.uri }}
               style={styles.previewThumb}
             />
-            <Text
-              style={[styles.previewLabel, { color: colors.textPrimary }]}
-            >
-              Foto anexada para diagnóstico
+            <Text style={[styles.previewLabel, { color: colors.textPrimary }]}>
+              {t.aiPhotoAttached}
             </Text>
             <TouchableOpacity onPress={() => setSelectedImage(null)}>
               <Ionicons
@@ -262,7 +273,7 @@ export const AIConsultScreen: React.FC = () => {
                 color: colors.textPrimary,
               },
             ]}
-            placeholder="Descreva sua dúvida botânica..."
+            placeholder={t.aiPlaceholder}
             placeholderTextColor={colors.textSecondary}
             value={inputText}
             onChangeText={setInputText}
@@ -270,10 +281,7 @@ export const AIConsultScreen: React.FC = () => {
 
           <TouchableOpacity
             onPress={handleSend}
-            style={[
-              styles.sendBtn,
-              { backgroundColor: colors.mossPrimary },
-            ]}
+            style={[styles.sendBtn, { backgroundColor: colors.mossPrimary }]}
           >
             <Ionicons name="send" size={17} color="#FFFFFF" />
           </TouchableOpacity>
@@ -282,12 +290,13 @@ export const AIConsultScreen: React.FC = () => {
 
       <ThemedModal
         visible={confirmClear}
-        title="Limpar histórico do chat?"
-        message="As mensagens anteriores desta consultoria serão apagadas."
+        title={t.aiClearTitle}
+        message={t.aiClearMsg}
         icon="chatbubble-ellipses-outline"
         tone="danger"
         isDark={profile.darkMode}
-        cancelLabel="Cancelar"
+        cancelLabel={t.cancel}
+        confirmLabel={t.confirm}
         onConfirm={() => {
           clearChatHistory();
           setConfirmClear(false);

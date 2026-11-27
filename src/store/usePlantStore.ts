@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { PlantArchetype } from '../services/plantSpeciesService';
+import { normalizeSpeciesKey } from '../services/geminiService';
 import { AppLanguage } from '../theme/theme';
 import { scheduleSpeciesWaterReminder } from '../utils/wateringSchedule';
 
@@ -12,6 +13,7 @@ export interface Plant {
   category: PlantArchetype;
   location: string;
   imageUrl?: string;
+  generatedArtUri?: string;
   hp: number;
   maxHp: number;
   lastWateredAt?: string;
@@ -37,9 +39,11 @@ interface PlantStoreState {
   plants: Plant[];
   xp: number;
   chatHistory: ChatMessage[];
+  speciesArtCache: Record<string, string>;
   seenTutorials: { home?: boolean; detail?: boolean; ai?: boolean };
   updateProfile: (patch: Partial<GardenerProfile>) => void;
-  addPlantsBatch: (newPlants: Omit<Plant, 'id' | 'hp' | 'maxHp'>[]) => void;
+  addPlantsBatch: (newPlants: Omit<Plant, 'id' | 'hp' | 'maxHp'>[]) => Plant[];
+  setSpeciesArt: (speciesName: string, fileUri: string) => void;
   waterPlant: (id: string) => void;
   simulateDay: () => void;
   dismissTutorial: (screen: 'home' | 'detail' | 'ai') => void;
@@ -49,13 +53,6 @@ interface PlantStoreState {
   importBackupJson: (rawJson: string) => boolean;
   resetGarden: () => void;
 }
-
-const WELCOME_MSG: ChatMessage = {
-  id: 'welcome-1',
-  role: 'ai',
-  text: 'Olá! Sou o BotanIA, seu assistente botânico. Envie uma foto da sua planta ou descreva o que está observando nas folhas para receber uma orientação completa.',
-  timestamp: 'Agora',
-};
 
 export const usePlantStore = create<PlantStoreState>()(
   persist(
@@ -67,7 +64,8 @@ export const usePlantStore = create<PlantStoreState>()(
       },
       plants: [],
       xp: 0,
-      chatHistory: [WELCOME_MSG],
+      chatHistory: [],
+      speciesArtCache: {},
       seenTutorials: {},
 
       updateProfile: (patch) =>
@@ -77,11 +75,16 @@ export const usePlantStore = create<PlantStoreState>()(
 
       addPlantsBatch: (newPlants) => {
         const nowIso = new Date().toISOString();
+        const cache = get().speciesArtCache;
+
         const created: Plant[] = newPlants.map((p, idx) => {
           scheduleSpeciesWaterReminder(p.name, p.category);
+          const key = normalizeSpeciesKey(p.species || p.name);
+          const cachedArt = p.generatedArtUri || cache[key];
           return {
             ...p,
             id: `${Date.now()}-${idx}`,
+            generatedArtUri: cachedArt,
             hp: 85,
             maxHp: 100,
             lastWateredAt: nowIso,
@@ -91,6 +94,21 @@ export const usePlantStore = create<PlantStoreState>()(
         set((state) => ({
           plants: [...state.plants, ...created],
           xp: state.xp + created.length * 15,
+        }));
+
+        return created;
+      },
+
+      setSpeciesArt: (speciesName, fileUri) => {
+        const key = normalizeSpeciesKey(speciesName);
+        set((state) => ({
+          speciesArtCache: { ...state.speciesArtCache, [key]: fileUri },
+          plants: state.plants.map((p) =>
+            normalizeSpeciesKey(p.species || p.name) === key ||
+            normalizeSpeciesKey(p.name) === key
+              ? { ...p, generatedArtUri: fileUri }
+              : p
+          ),
         }));
       },
 
@@ -127,22 +145,20 @@ export const usePlantStore = create<PlantStoreState>()(
           chatHistory: [...state.chatHistory, msg],
         })),
 
-      clearChatHistory: () =>
-        set({
-          chatHistory: [WELCOME_MSG],
-        }),
+      clearChatHistory: () => set({ chatHistory: [] }),
 
       exportBackupJson: () => {
-        const { profile, plants, xp, chatHistory } = get();
+        const { profile, plants, xp, chatHistory, speciesArtCache } = get();
         return JSON.stringify(
           {
             app: 'BotanIA',
-            version: '7.0',
+            version: '10.0',
             exportedAt: new Date().toISOString(),
             profile,
             plants,
             xp,
             chatHistory,
+            speciesArtCache,
           },
           null,
           2
@@ -159,7 +175,8 @@ export const usePlantStore = create<PlantStoreState>()(
             xp: typeof parsed.xp === 'number' ? parsed.xp : 0,
             chatHistory: Array.isArray(parsed.chatHistory)
               ? parsed.chatHistory
-              : [WELCOME_MSG],
+              : [],
+            speciesArtCache: parsed.speciesArtCache || {},
           });
           return true;
         } catch {
@@ -171,7 +188,7 @@ export const usePlantStore = create<PlantStoreState>()(
         set({
           plants: [],
           xp: 0,
-          chatHistory: [WELCOME_MSG],
+          chatHistory: [],
         }),
     }),
     {
@@ -185,3 +202,4 @@ export const selectCurrentLevel = (state: PlantStoreState) =>
   Math.floor(state.xp / 100) + 1;
 
 export const selectXpProgress = (state: PlantStoreState) => state.xp % 100;
+

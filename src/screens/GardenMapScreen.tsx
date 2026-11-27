@@ -13,7 +13,7 @@ import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
-import { PALETTES } from '../theme/theme';
+import { PALETTES, TRANSLATIONS } from '../theme/theme';
 
 interface NearbyGardenPlace {
   id: string;
@@ -45,13 +45,16 @@ function getDistanceKm(
 export const GardenMapScreen: React.FC = () => {
   const profile = usePlantStore((s) => s.profile);
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
+  const t = TRANSLATIONS[profile.language];
 
   const [loading, setLoading] = useState(true);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     null
   );
   const [places, setPlaces] = useState<NearbyGardenPlace[]>([]);
-  const [statusNote, setStatusNote] = useState<string | null>(null);
+  const [statusKey, setStatusKey] = useState<
+    'denied' | 'empty' | 'fallback' | null
+  >(null);
 
   useEffect(() => {
     loadNearbyPlaces();
@@ -59,13 +62,11 @@ export const GardenMapScreen: React.FC = () => {
 
   const loadNearbyPlaces = async () => {
     setLoading(true);
-    setStatusNote(null);
+    setStatusKey(null);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setStatusNote(
-          'Ative a permissão de localização para exibir o mapa com floriculturas e viveiros próximos.'
-        );
+        setStatusKey('denied');
         setLoading(false);
         return;
       }
@@ -74,7 +75,6 @@ export const GardenMapScreen: React.FC = () => {
       const { latitude, longitude } = loc.coords;
       setCoords({ lat: latitude, lng: longitude });
 
-      // Busca real e gratuita de floriculturas, garden centers e viveiros via OpenStreetMap Overpass
       const overpassQuery = `[out:json][timeout:10];(node["shop"~"florist|garden_centre"](around:6000,${latitude},${longitude});way["shop"~"florist|garden_centre"](around:6000,${latitude},${longitude});node["landuse"="plant_nursery"](around:6000,${latitude},${longitude}););out center 15;`;
 
       const res = await fetch('https://overpass-api.de/api/interpreter', {
@@ -91,11 +91,11 @@ export const GardenMapScreen: React.FC = () => {
             if (!pLat || !pLng) return null;
             return {
               id: String(el.id),
-              name: el.tags?.name || 'Floricultura / Viveiro Local',
+              name: el.tags?.name || 'Garden Center',
               type:
                 el.tags?.shop === 'garden_centre'
                   ? 'Garden Center'
-                  : 'Floricultura & Plantas',
+                  : 'Florist & Plants',
               lat: pLat,
               lng: pLng,
               distanceKm: getDistanceKm(latitude, longitude, pLat, pLng),
@@ -109,14 +109,10 @@ export const GardenMapScreen: React.FC = () => {
 
         setPlaces(mapped);
       } else {
-        setStatusNote(
-          'Nenhuma floricultura mapeada num raio de 6 km. Você pode expandir a busca no Google Maps abaixo.'
-        );
+        setStatusKey('empty');
       }
     } catch {
-      setStatusNote(
-        'Mapa carregado! Caso a lista demore, você também pode abrir rotas no Google Maps.'
-      );
+      setStatusKey('fallback');
     } finally {
       setLoading(false);
     }
@@ -129,7 +125,7 @@ export const GardenMapScreen: React.FC = () => {
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
   };
 
-  // HTML do Mapa Interativo Leaflet embutido (zero chave paga)
+  // Tiles gratuitos da Esri (zero API key, carrega sempre no Android/iOS)
   const mapHtml = useMemo(() => {
     if (!coords) return '';
     const markersJson = JSON.stringify(places);
@@ -142,34 +138,43 @@ export const GardenMapScreen: React.FC = () => {
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
           html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #EAE5D9; }
-          .user-dot { width: 16px; height: 16px; border-radius: 50%; background: #1E352B; border: 3px solid #FAF7F0; box-shadow: 0 2px 8px rgba(0,0,0,0.35); }
-          .shop-pin { width: 28px; height: 28px; border-radius: 50% 50% 50% 0; background: #3A5A40; transform: rotate(-45deg); border: 2px solid #FAF7F0; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+          .user-dot { width: 16px; height: 16px; border-radius: 50%; background: #1E352B; border: 3px solid #FAF7F0; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+          .shop-pin { width: 26px; height: 26px; border-radius: 50% 50% 50% 0; background: #3A5A40; transform: rotate(-45deg); border: 2px solid #FAF7F0; box-shadow: 0 2px 6px rgba(0,0,0,0.35); }
         </style>
       </head>
       <body>
         <div id="map"></div>
         <script>
-          const map = L.map('map', { zoomControl: false }).setView([${coords.lat}, ${coords.lng}], 13);
-          L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-            maxZoom: 19,
-            attribution: '&copy; OpenStreetMap'
+          const map = L.map('map', { zoomControl: false }).setView([${coords.lat}, ${coords.lng}], 14);
+          L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 18,
+            attribution: 'Tiles &copy; Esri'
           }).addTo(map);
 
           const userIcon = L.divIcon({ className: 'user-dot', iconSize: [16, 16] });
-          L.marker([${coords.lat}, ${coords.lng}], { icon: userIcon }).addTo(map).bindPopup('<b>Você está aqui</b>');
+          L.marker([${coords.lat}, ${coords.lng}], { icon: userIcon }).addTo(map);
 
           const shopIcon = L.divIcon({ className: 'shop-pin', iconSize: [26, 26], iconAnchor: [13, 26] });
           const places = ${markersJson};
           places.forEach(p => {
             L.marker([p.lat, p.lng], { icon: shopIcon })
               .addTo(map)
-              .bindPopup('<b>' + p.name + '</b><br/>' + p.type + ' • ' + p.distanceKm.toFixed(1) + ' km');
+              .bindPopup('<b>' + p.name + '</b><br/>' + p.distanceKm.toFixed(1) + ' km');
           });
         </script>
       </body>
       </html>
     `;
   }, [coords, places]);
+
+  const statusText =
+    statusKey === 'denied'
+      ? t.mapPermissionDenied
+      : statusKey === 'empty'
+      ? t.mapEmptyNote
+      : statusKey === 'fallback'
+      ? t.mapFallbackNote
+      : null;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
@@ -181,10 +186,10 @@ export const GardenMapScreen: React.FC = () => {
       >
         <View>
           <Text style={[styles.title, { color: colors.textPrimary }]}>
-            Garden Centers & Viveiros
+            {t.mapTitle}
           </Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Mapa ao vivo de lojas botânicas perto de você
+            {t.mapSub}
           </Text>
         </View>
         <TouchableOpacity
@@ -195,7 +200,6 @@ export const GardenMapScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Mapa Interativo Embutido */}
       <View style={[styles.mapCard, { borderColor: colors.border }]}>
         {coords ? (
           <WebView
@@ -209,18 +213,17 @@ export const GardenMapScreen: React.FC = () => {
           <View style={styles.mapLoader}>
             <ActivityIndicator size="large" color={colors.mossPrimary} />
             <Text style={[styles.noteText, { color: colors.textSecondary }]}>
-              Localizando viveiros na sua região...
+              {t.mapLocating}
             </Text>
           </View>
         )}
       </View>
 
-      {/* Lista de Locais Encontrados */}
       {loading && coords ? (
         <View style={styles.listLoading}>
           <ActivityIndicator size="small" color={colors.mossPrimary} />
           <Text style={[styles.noteText, { color: colors.textSecondary }]}>
-            Buscando floriculturas próximas...
+            {t.mapSearching}
           </Text>
         </View>
       ) : (
@@ -229,7 +232,7 @@ export const GardenMapScreen: React.FC = () => {
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
           ListEmptyComponent={
-            statusNote ? (
+            statusText ? (
               <View
                 style={[
                   styles.noteCard,
@@ -242,7 +245,7 @@ export const GardenMapScreen: React.FC = () => {
                 <Text
                   style={[styles.noteText, { color: colors.textSecondary }]}
                 >
-                  {statusNote}
+                  {statusText}
                 </Text>
                 <TouchableOpacity
                   onPress={() =>
@@ -259,7 +262,7 @@ export const GardenMapScreen: React.FC = () => {
                 >
                   <Ionicons name="map-outline" size={16} color="#FFFFFF" />
                   <Text style={styles.fallbackBtnText}>
-                    Abrir busca expandida no Maps
+                    {t.mapOpenExpanded}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -298,7 +301,8 @@ export const GardenMapScreen: React.FC = () => {
                 <Text
                   style={[styles.placeAddr, { color: colors.textSecondary }]}
                 >
-                  {item.type} • {item.distanceKm.toFixed(1)} km de você
+                  {item.type} • {item.distanceKm.toFixed(1)}{' '}
+                  {t.mapDistanceSuffix}
                 </Text>
               </View>
               <Ionicons
