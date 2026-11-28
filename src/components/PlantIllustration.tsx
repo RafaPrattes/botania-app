@@ -26,8 +26,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 export const LOCAL_GHIBLI_ASSETS: Partial<
   Record<PlantArchetype, ImageSourcePropType>
 > = {
-  // pendente: require('../../assets/ghibli/pendente.png'),
-  // suculenta: require('../../assets/ghibli/suculenta.png'),
+  pendente: require('../../assets/ghibli/pendente.png'),
+  suculenta: require('../../assets/ghibli/suculenta.png'),
   cacto: require('../../assets/ghibli/cacto.png'),
   bonsai: require('../../assets/ghibli/bonsai_japones.png'),
   //flor: require('../../assets/ghibli/flor.png'),

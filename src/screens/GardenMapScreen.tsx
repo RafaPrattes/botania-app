@@ -31,7 +31,6 @@ interface NearbyGardenPlace {
   mapsUrl: string;
   rating?: number;
   isSupplies?: boolean;
-  hasRealStorePhoto?: boolean;
 }
 
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim();
@@ -54,9 +53,8 @@ function getDistanceKm(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Gera uma prévia real do mapa/localização da loja (Esri World Imagery / Street) quando não há chave do Google Places
 function buildLocationPreviewPhoto(lat: number, lng: number): string {
-  const delta = 0.0035;
+  const delta = 0.004;
   const bbox = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
   return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&size=800,450&imageSR=4326&format=png&f=image`;
 }
@@ -80,7 +78,7 @@ export const GardenMapScreen: React.FC = () => {
     useState<NearbyGardenPlace | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  // Busca real usando Google Places API (New) -> Fotos reais + Endereço real + Link oficial do Google Maps
+  // 1) Busca via Google Places API (New) — se EXPO_PUBLIC_GOOGLE_MAPS_API_KEY estiver no .env
   const fetchWithGooglePlaces = async (
     lat: number,
     lng: number,
@@ -102,11 +100,11 @@ export const GardenMapScreen: React.FC = () => {
           body: JSON.stringify({
             textQuery: keyword,
             languageCode: profile.language === 'en' ? 'en' : 'pt-BR',
-            maxResultCount: 10,
+            maxResultCount: 12,
             locationBias: {
               circle: {
                 center: { latitude: lat, longitude: lng },
-                radius: 8000.0,
+                radius: 15000.0,
               },
             },
           }),
@@ -142,8 +140,6 @@ export const GardenMapScreen: React.FC = () => {
                 `${p.displayName?.text} ${p.formattedAddress || ''}`
               )}`,
             rating: p.rating,
-            isSupplies: keyword.toLowerCase().includes('vaso'),
-            hasRealStorePhoto: Boolean(photoName),
           };
         })
         .sort(
@@ -155,122 +151,177 @@ export const GardenMapScreen: React.FC = () => {
     }
   };
 
-  // Busca real gratuita (Nominatim + Overpass OpenStreetMap) com endereço real + link real no Google Maps
+  // 2) Busca real gratuita otimizada para cidades amplas (ex: Brasília DF)
   const fetchWithOpenStreetMap = async (
     lat: number,
     lng: number,
-    term: string
+    cityName: string,
+    mode: 'near' | 'supplies',
+    customQuery?: string
   ): Promise<NearbyGardenPlace[]> => {
-    const delta = 0.08; // ~8km ao redor
-    const viewbox = `${lng - delta},${lat + delta},${lng + delta},${lat - delta}`;
+    const collected = new Map<string, NearbyGardenPlace>();
 
-    // 1. Nominatim (muito mais estável e rápido que Overpass!)
-    try {
-      const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=12&bounded=1&viewbox=${viewbox}&q=${encodeURIComponent(
-        term
+    const addPlace = (place: NearbyGardenPlace) => {
+      const dedupeKey = `${place.name.toLowerCase().trim()}-${place.lat.toFixed(
+        3
       )}`;
-      const res = await fetch(nomUrl, {
+      if (!collected.has(dedupeKey)) {
+        collected.set(dedupeKey, place);
+      }
+    };
+
+    // A) Overpass API com raio de 18km (essencial para Brasília!) + busca por tags e por nomes reais
+    try {
+      const shopFilter =
+        mode === 'supplies'
+          ? 'garden_centre|agrarian|florist'
+          : 'florist|garden_centre|agrarian';
+
+      const overpassQuery = `
+        [out:json][timeout:14];
+        (
+          node["shop"~"${shopFilter}"](around:18000,${lat},${lng});
+          way["shop"~"${shopFilter}"](around:18000,${lat},${lng});
+          node["name"~"Floricultura|Garden|Orquid|Paisagis|Jardinagem|Plantas",i](around:18000,${lat},${lng});
+          way["name"~"Floricultura|Garden|Orquid|Paisagis|Jardinagem|Plantas",i](around:18000,${lat},${lng});
+        );
+        out center 25;
+      `;
+
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
         headers: {
-          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
           'User-Agent': 'BotanIAApp/1.0 (https://github.com/RafaPrattes/botania-app)',
         },
+        body: `data=${encodeURIComponent(overpassQuery)}`,
       });
-      const list = await res.json();
 
-      if (Array.isArray(list) && list.length > 0) {
-        return list
-          .map((item: any) => {
+      const data = await res.json();
+      if (Array.isArray(data?.elements)) {
+        for (const el of data.elements) {
+          const pLat = el.lat ?? el.center?.lat;
+          const pLng = el.lon ?? el.center?.lon;
+          const rawName = el.tags?.name;
+          if (!pLat || !pLng || !rawName) continue;
+
+          // Filtra termos indesejados e garante foco em jardinagem
+          const lowerName = rawName.toLowerCase();
+          if (lowerName.includes('cemitério') || lowerName.includes('cemiterio')) {
+            continue;
+          }
+
+          const street = [
+            el.tags?.['addr:street'],
+            el.tags?.['addr:housenumber'],
+          ]
+            .filter(Boolean)
+            .join(', ');
+          const suburb =
+            el.tags?.['addr:suburb'] ||
+            el.tags?.['addr:neighbourhood'] ||
+            el.tags?.['addr:city'] ||
+            cityName;
+          const address =
+            [street, suburb].filter(Boolean).join(' · ') || cityName;
+
+          const isGarden =
+            el.tags?.shop === 'garden_centre' ||
+            lowerName.includes('garden') ||
+            lowerName.includes('paisag') ||
+            lowerName.includes('jardin');
+
+          addPlace({
+            id: `osm-${el.id}`,
+            name: rawName,
+            tagline: isGarden
+              ? 'Garden Center · Plantas, vasos e substratos'
+              : 'Floricultura & Plantas ornamentais',
+            address,
+            lat: pLat,
+            lng: pLng,
+            distanceKm: getDistanceKm(lat, lng, pLat, pLng),
+            photoUrl: buildLocationPreviewPhoto(pLat, pLng),
+            mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+              `${rawName}, ${address}`
+            )}`,
+            isSupplies: isGarden,
+          });
+        }
+      }
+    } catch {
+      // Continua para Nominatim
+    }
+
+    // B) Nominatim complementar por nome da cidade (sem caixa restrita que zera Brasília!)
+    if (collected.size < 4 || customQuery?.trim()) {
+      const queriesToRun = customQuery?.trim()
+        ? [`${customQuery.trim()} ${cityName}`]
+        : [
+            `Floricultura ${cityName}`,
+            `Garden Center ${cityName}`,
+            `Plantas e jardinagem ${cityName}`,
+          ];
+
+      for (const q of queriesToRun) {
+        try {
+          const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=8&q=${encodeURIComponent(
+            q
+          )}`;
+          const res = await fetch(nomUrl, {
+            headers: {
+              Accept: 'application/json',
+              'User-Agent':
+                'BotanIAApp/1.0 (https://github.com/RafaPrattes/botania-app)',
+            },
+          });
+          const list = await res.json();
+          if (!Array.isArray(list)) continue;
+
+          for (const item of list) {
             const pLat = parseFloat(item.lat);
             const pLng = parseFloat(item.lon);
+            const dist = getDistanceKm(lat, lng, pLat, pLng);
+            if (dist > 35) continue; // Mantém resultados na mesma região metropolitana
+
             const addr = item.address || {};
-            const street = [addr.road, addr.house_number]
-              .filter(Boolean)
-              .join(', ');
-            const district =
-              addr.suburb || addr.neighbourhood || addr.city || addr.town || '';
-            const fullAddress =
-              [street, district].filter(Boolean).join(' • ') ||
-              item.display_name.split(',').slice(0, 3).join(',');
             const name =
               item.name ||
               item.display_name.split(',')[0] ||
-              'Floricultura';
+              'Espaço de Jardinagem';
+            const fullAddress =
+              [addr.road, addr.suburb || addr.neighbourhood || addr.city]
+                .filter(Boolean)
+                .join(' · ') ||
+              item.display_name.split(',').slice(1, 3).join(',');
 
-            return {
-              id: String(item.place_id),
+            addPlace({
+              id: `nom-${item.place_id}`,
               name,
               tagline:
-                item.type === 'garden_centre'
-                  ? 'Garden Center • Plantas, vasos e substratos'
-                  : 'Floricultura & Plantas ornamentais',
+                mode === 'supplies'
+                  ? 'Garden Center · Vasos, substratos e plantas'
+                  : 'Floricultura & Espaço de Jardinagem',
               address: fullAddress,
               lat: pLat,
               lng: pLng,
-              distanceKm: getDistanceKm(lat, lng, pLat, pLng),
+              distanceKm: dist,
               photoUrl: buildLocationPreviewPhoto(pLat, pLng),
               mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                 `${name}, ${fullAddress}`
               )}`,
-              isSupplies: item.type === 'garden_centre',
-            };
-          })
-          .sort(
-            (a: NearbyGardenPlace, b: NearbyGardenPlace) =>
-              a.distanceKm - b.distanceKm
-          );
+              isSupplies: mode === 'supplies',
+            });
+          }
+        } catch {
+          // Segue para a próxima consulta
+        }
       }
-    } catch {
-      // Continua para Overpass
     }
 
-    // 2. Fallback Overpass caso Nominatim não retorne na área
-    try {
-      const overpassQuery = `[out:json][timeout:10];(node["shop"~"florist|garden_centre"](around:8000,${lat},${lng});way["shop"~"florist|garden_centre"](around:8000,${lat},${lng}););out center 15;`;
-      const res = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: `data=${encodeURIComponent(overpassQuery)}`,
-      });
-      const data = await res.json();
-      if (Array.isArray(data?.elements)) {
-        return data.elements
-          .map((el: any) => {
-            const pLat = el.lat ?? el.center?.lat;
-            const pLng = el.lon ?? el.center?.lon;
-            if (!pLat || !pLng) return null;
-            const name = el.tags?.name || 'Floricultura Local';
-            const addr =
-              [el.tags?.['addr:street'], el.tags?.['addr:suburb']]
-                .filter(Boolean)
-                .join(' • ') || cityLabel;
-            return {
-              id: String(el.id),
-              name,
-              tagline:
-                el.tags?.shop === 'garden_centre'
-                  ? 'Garden Center • Plantas e vasos'
-                  : 'Floricultura & Plantas',
-              address: addr,
-              lat: pLat,
-              lng: pLng,
-              distanceKm: getDistanceKm(lat, lng, pLat, pLng),
-              photoUrl: buildLocationPreviewPhoto(pLat, pLng),
-              mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                `${name} @${pLat},${pLng}`
-              )}`,
-              isSupplies: el.tags?.shop === 'garden_centre',
-            };
-          })
-          .filter(Boolean)
-          .sort(
-            (a: NearbyGardenPlace, b: NearbyGardenPlace) =>
-              a.distanceKm - b.distanceKm
-          );
-      }
-    } catch {
-      // Sem resultados
-    }
-
-    return [];
+    return Array.from(collected.values())
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 15);
   };
 
   const runNearbySearch = useCallback(
@@ -295,29 +346,29 @@ export const GardenMapScreen: React.FC = () => {
         const { latitude, longitude } = loc.coords;
         setCoords({ lat: latitude, lng: longitude });
 
-        let detectedCity = cityLabel;
+        let detectedCity = 'Brasília';
         try {
           const geo = await Location.reverseGeocodeAsync({
             latitude,
             longitude,
           });
           if (geo[0]) {
-            const c = geo[0].city || geo[0].subregion || 'Sua região';
+            const c =
+              geo[0].city || geo[0].subregion || geo[0].region || 'Sua região';
             const r = geo[0].region || '';
-            detectedCity = r ? `${c}, ${r}` : c;
-            setCityLabel(detectedCity);
+            detectedCity = c;
+            setCityLabel(r && r !== c ? `${c}, ${r}` : c);
           }
         } catch {
-          // Mantém rótulo anterior
+          setCityLabel('Sua região');
         }
 
         const queryTerm = customQuery?.trim()
           ? `${customQuery.trim()} floricultura garden center`
           : mode === 'supplies'
-          ? 'garden center plantas vasos substrato'
-          : 'floricultura garden center plantas';
+          ? 'garden center plantas vasos substratos jardinagem'
+          : 'floricultura garden center plantas ornamentais';
 
-        // 1. Tenta Google Places API (New) com fotos reais de fachada
         const googleResults = await fetchWithGooglePlaces(
           latitude,
           longitude,
@@ -329,28 +380,29 @@ export const GardenMapScreen: React.FC = () => {
           return;
         }
 
-        // 2. Fallback gratuito real (Nominatim + Overpass) com endereços reais
         const osmResults = await fetchWithOpenStreetMap(
           latitude,
           longitude,
-          customQuery?.trim() || (mode === 'supplies' ? 'garden' : 'floricultura')
+          detectedCity,
+          mode,
+          customQuery
         );
 
         setPlaces(osmResults);
         if (osmResults.length === 0) {
           setStatusError(
-            `Nenhum garden center mapeado em ${detectedCity} via OpenStreetMap. Toque abaixo para ver todos no Google Maps.`
+            `Não encontramos espaços cadastrados no mapa aberto nesta busca em ${detectedCity}. Toque abaixo para abrir a lista completa no Google Maps.`
           );
         }
       } catch {
         setStatusError(
-          'Não foi possível buscar sua localização agora. Tente tocar em atualizar.'
+          'Não foi possível atualizar sua localização agora. Tente tocar no botão de atualizar.'
         );
       } finally {
         setLoading(false);
       }
     },
-    [cityLabel, profile.language]
+    [profile.language]
   );
 
   useEffect(() => {
@@ -371,6 +423,8 @@ export const GardenMapScreen: React.FC = () => {
     Linking.openURL(place.mapsUrl);
   };
 
+  // MAPA AO VIVO DE ALTO CONTRASTE:
+  // Ruas suavizadas + pinos pulsantes em terracota/musgo com rótulos visíveis + enquadramento automático
   const mapHtml = useMemo(() => {
     if (!coords) return '';
     const markersJson = JSON.stringify(places);
@@ -382,9 +436,72 @@ export const GardenMapScreen: React.FC = () => {
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
-          html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #ECE7DC; }
-          .user-dot { width: 16px; height: 16px; border-radius: 50%; background: #1F3A2E; border: 3px solid #FAF7F0; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-          .shop-pin { width: 26px; height: 26px; border-radius: 50% 50% 50% 0; background: #3D6249; transform: rotate(-45deg); border: 2px solid #FAF7F0; box-shadow: 0 2px 6px rgba(0,0,0,0.35); }
+          html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #ECE7DC; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+          /* Suaviza o fundo do mapa para os pontos de jardinagem SALTAREEM aos olhos */
+          .leaflet-tile-pane { filter: grayscale(42%) saturate(65%) contrast(94%) brightness(104%); }
+
+          .user-dot {
+            width: 18px; height: 18px; border-radius: 50%;
+            background: #2563EB; border: 3px solid #FFFFFF;
+            box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.25);
+          }
+
+          .garden-marker-wrap {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+          }
+          .garden-pulse {
+            position: absolute;
+            top: -4px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: rgba(169, 81, 56, 0.32);
+            animation: pulseRing 2s infinite ease-out;
+          }
+          @keyframes pulseRing {
+            0% { transform: scale(0.75); opacity: 0.9; }
+            100% { transform: scale(1.65); opacity: 0; }
+          }
+          .garden-pin-circle {
+            position: relative;
+            z-index: 2;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #A95138;
+            border: 3px solid #FAF7F0;
+            box-shadow: 0 4px 12px rgba(25, 38, 31, 0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #FAF7F0;
+            font-size: 16px;
+            font-weight: 800;
+          }
+          .garden-label-pill {
+            margin-top: 3px;
+            background: #1F3A2E;
+            color: #FAF7F0;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 10px;
+            white-space: nowrap;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            border: 1.5px solid #FAF7F0;
+          }
+          .popup-card { font-size: 13px; line-height: 1.4; color: #19261F; }
+          .popup-btn {
+            display: inline-block; margin-top: 6px; padding: 6px 10px;
+            background: #1F3A2E; color: #FFF !important; border-radius: 8px;
+            text-decoration: none; font-weight: 700; font-size: 12px;
+          }
         </style>
       </head>
       <body>
@@ -395,15 +512,41 @@ export const GardenMapScreen: React.FC = () => {
             maxZoom: 18,
             attribution: 'Tiles &copy; Esri'
           }).addTo(map);
-          const userIcon = L.divIcon({ className: 'user-dot', iconSize: [16, 16] });
-          L.marker([${coords.lat}, ${coords.lng}], { icon: userIcon }).addTo(map);
-          const shopIcon = L.divIcon({ className: 'shop-pin', iconSize: [26, 26], iconAnchor: [13, 26] });
+
+          const bounds = [[${coords.lat}, ${coords.lng}]];
+          const userIcon = L.divIcon({ className: 'user-dot', iconSize: [18, 18], iconAnchor: [9, 9] });
+          L.marker([${coords.lat}, ${coords.lng}], { icon: userIcon }).addTo(map).bindPopup('<b>Você está aqui</b>');
+
           const places = ${markersJson};
-          places.forEach(p => {
+          places.forEach((p) => {
+            bounds.push([p.lat, p.lng]);
+            const safeName = (p.name || 'Garden Center').replace(/</g, '&lt;');
+            const pinHtml =
+              '<div class="garden-marker-wrap">' +
+                '<div class="garden-pulse"></div>' +
+                '<div class="garden-pin-circle">✦</div>' +
+                '<div class="garden-label-pill">' + safeName + '</div>' +
+              '</div>';
+
+            const shopIcon = L.divIcon({
+              className: '',
+              html: pinHtml,
+              iconSize: [140, 62],
+              iconAnchor: [70, 22],
+            });
+
             L.marker([p.lat, p.lng], { icon: shopIcon })
               .addTo(map)
-              .bindPopup('<b>' + p.name + '</b><br/>' + p.distanceKm.toFixed(1) + ' km');
+              .bindPopup(
+                '<div class="popup-card"><b>' + safeName + '</b><br/>' +
+                p.distanceKm.toFixed(1) + ' km · ' + (p.address || '') +
+                '<br/><a class="popup-btn" href="' + p.mapsUrl + '" target="_blank">Abrir rota no Maps</a></div>'
+              );
           });
+
+          if (bounds.length > 1) {
+            map.fitBounds(bounds, { padding: [46, 46], maxZoom: 14 });
+          }
         </script>
       </body>
       </html>
@@ -437,7 +580,7 @@ export const GardenMapScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Busca Real por Cidade, Bairro ou Nome */}
+      {/* Busca por Cidade, Bairro ou Nome da Loja */}
       <View style={styles.searchWrap}>
         <View
           style={[
@@ -483,7 +626,7 @@ export const GardenMapScreen: React.FC = () => {
         </View>
       </View>
 
-      {/* Pílulas de Filtro (Agora disparam busca real!) */}
+      {/* Pílulas de Filtro */}
       <View style={styles.filterRow}>
         {(
           [
@@ -524,13 +667,22 @@ export const GardenMapScreen: React.FC = () => {
       {activeTab === 'map' ? (
         <View style={[styles.liveMapCard, { borderColor: colors.border }]}>
           {coords ? (
-            <WebView
-              originWhitelist={['*']}
-              source={{ html: mapHtml }}
-              style={{ flex: 1 }}
-              javaScriptEnabled
-              domStorageEnabled
-            />
+            <>
+              <WebView
+                originWhitelist={['*']}
+                source={{ html: mapHtml }}
+                style={{ flex: 1 }}
+                javaScriptEnabled
+                domStorageEnabled
+              />
+              {/* Legenda flutuante de alto contraste no mapa */}
+              <View style={styles.mapLegendPill}>
+                <View style={styles.legendDot} />
+                <Text style={styles.legendText}>
+                  {places.length} pontos de jardinagem encontrados
+                </Text>
+              </View>
+            </>
           ) : (
             <View style={styles.centerBox}>
               <ActivityIndicator size="large" color={colors.mossPrimary} />
@@ -541,7 +693,7 @@ export const GardenMapScreen: React.FC = () => {
         <View style={styles.centerBox}>
           <ActivityIndicator size="large" color={colors.mossPrimary} />
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            {t.mapEmptyNote}
+            Buscando floriculturas e garden centers perto de você...
           </Text>
         </View>
       ) : (
@@ -585,7 +737,8 @@ export const GardenMapScreen: React.FC = () => {
                   { color: colors.textSecondary, marginVertical: 10 },
                 ]}
               >
-                {statusError || t.mapEmptyNote}
+                {statusError ||
+                  'Buscando floriculturas e garden centers na sua região...'}
               </Text>
               <TouchableOpacity
                 onPress={() =>
@@ -700,7 +853,7 @@ export const GardenMapScreen: React.FC = () => {
         />
       )}
 
-      {/* Modal Editorial "Seu próximo passeio verde." com rota real */}
+      {/* Modal "Seu próximo passeio verde." */}
       <Modal visible={Boolean(selectedPlace)} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View
@@ -942,6 +1095,36 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     overflow: 'hidden',
+    position: 'relative',
+  },
+  mapLegendPill: {
+    position: 'absolute',
+    bottom: 14,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1F3A2E',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#A95138',
+    borderWidth: 1.5,
+    borderColor: '#FAF7F0',
+  },
+  legendText: {
+    color: '#FAF7F0',
+    fontSize: 12.5,
+    fontWeight: '700',
   },
   centerBox: {
     flex: 1,

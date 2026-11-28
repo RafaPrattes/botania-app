@@ -23,7 +23,6 @@ import {
 } from '../services/plantSpeciesService';
 import {
   identifyPlantFromPhoto,
-  generateGhibliPlantArt,
   normalizeSpeciesKey,
 } from '../services/geminiService';
 import { PALETTES } from '../theme/theme';
@@ -197,18 +196,10 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
       {
         name: finalName,
         species: finalSpecies,
-        category: inferPlantArchetype(`${finalName} ${finalSpecies} ${category}`),
+        category,
         location,
       },
     ]);
-
-     const key = normalizeSpeciesKey(finalSpecies);
-    if (!speciesArtCache[key]) {
-      // Gera a ilustração Ghibli da nova espécie em segundo plano e salva em cache local
-      generateGhibliPlantArt(finalSpecies).then((uri) => {
-        if (uri) setSpeciesArt(finalSpecies, uri);
-      });
-    }
 
     onFinish();
   };

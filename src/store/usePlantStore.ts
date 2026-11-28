@@ -47,6 +47,7 @@ interface PlantStoreState {
   addPlantsBatch: (newPlants: Omit<Plant, 'id' | 'hp' | 'maxHp'>[]) => Plant[];
   setSpeciesArt: (speciesName: string, fileUri: string) => void;
   waterPlant: (id: string) => void;
+  removePlant: (id: string) => void;
   simulateDay: () => void;
   dismissTutorial: (screen: 'home' | 'detail' | 'ai') => void;
   appendChatMessage: (msg: ChatMessage) => void;
@@ -144,6 +145,11 @@ export const usePlantStore = create<PlantStoreState>()(
           lastCareDay: today,
         }));
       },
+
+      removePlant: (id) =>
+        set((state) => ({
+          plants: state.plants.filter((p) => p.id !== id),
+        })),
 
       simulateDay: () =>
         set((state) => ({

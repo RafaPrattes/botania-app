@@ -3,22 +3,20 @@ import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   StyleSheet,
-  ActivityIndicator,
   Modal,
   ImageBackground,
   Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 import { PlantIllustration } from '../components/PlantIllustration';
-import {
-  generateGhibliPlantArtDetailed,
-  normalizeSpeciesKey,
-} from '../services/geminiService';
 import { PlantArchetype } from '../services/plantSpeciesService';
+import { findCuratedSpecies } from '../data/houseplantLibrary';
 import { useWeatherSync, WeatherMood } from '../hooks/useWeatherSync';
 import { AppLanguage, PALETTES, TRANSLATIONS } from '../theme/theme';
 import {
@@ -34,31 +32,49 @@ interface PlantDetailScreenProps {
   onSelectPlant: (id: string) => void;
 }
 
-const RAIN_STREAKS = [
-  { left: '12%', delay: 0 },
-  { left: '26%', delay: 180 },
-  { left: '41%', delay: 90 },
-  { left: '56%', delay: 260 },
-  { left: '70%', delay: 140 },
-  { left: '84%', delay: 310 },
-];
+const DELETE_COPY: Record<
+  AppLanguage,
+  {
+    btnLabel: string;
+    title: string;
+    message: (name: string) => string;
+    confirm: string;
+  }
+> = {
+  pt: {
+    btnLabel: 'Remover planta da estufa',
+    title: 'Remover esta planta?',
+    message: (name) =>
+      `"${name}" será retirada da sua estufa. Essa ação não pode ser desfeita.`,
+    confirm: 'Remover',
+  },
+  en: {
+    btnLabel: 'Remove plant from greenhouse',
+    title: 'Remove this plant?',
+    message: (name) =>
+      `"${name}" will be removed from your greenhouse. This action cannot be undone.`,
+    confirm: 'Remove',
+  },
+  es: {
+    btnLabel: 'Eliminar planta del invernadero',
+    title: '¿Eliminar esta planta?',
+    message: (name) =>
+      `"${name}" se eliminará de tu invernadero. Esta acción no se puede deshacer.`,
+    confirm: 'Eliminar',
+  },
+};
 
-const WATER_DROPS = [
-  { left: '34%', delay: 0 },
-  { left: '44%', delay: 120 },
-  { left: '50%', delay: 60 },
-  { left: '58%', delay: 180 },
-  { left: '66%', delay: 90 },
-];
-
-const FIREFLIES = [
-  { left: '22%', top: '28%' },
-  { left: '74%', top: '22%' },
-  { left: '62%', top: '54%' },
-  { left: '30%', top: '62%' },
-];
-
-function getLightLabel(category: PlantArchetype, lang: AppLanguage): string {
+function getLightLabel(
+  speciesName: string,
+  category: PlantArchetype,
+  lang: AppLanguage
+): string {
+  const curated = findCuratedSpecies(speciesName);
+  if (curated) {
+    if (lang === 'en') return curated.lightEn;
+    if (lang === 'es') return curated.lightEs;
+    return curated.lightPt;
+  }
   const map: Record<PlantArchetype, Record<AppLanguage, string>> = {
     cacto: { pt: 'Sol pleno', en: 'Full sun', es: 'Sol directo' },
     suculenta: { pt: 'Sol suave', en: 'Bright sun', es: 'Sol suave' },
@@ -77,79 +93,50 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
 }) => {
   const plants = usePlantStore((s) => s.plants);
   const waterPlant = usePlantStore((s) => s.waterPlant);
+  const removePlant = usePlantStore((s) => s.removePlant);
   const profile = usePlantStore((s) => s.profile);
-  const speciesArtCache = usePlantStore((s) => s.speciesArtCache);
-  const setSpeciesArt = usePlantStore((s) => s.setSpeciesArt);
 
   const { liveMood, temperature } = useWeatherSync();
   const [moodOverride, setMoodOverride] = useState<WeatherMood | null>(null);
   const activeMood: WeatherMood = moodOverride ?? liveMood;
 
-  const [isWatering, setIsWatering] = useState(false);
-  const [generatingArt, setGeneratingArt] = useState(false);
+  const [isHoldingWater, setIsHoldingWater] = useState(false);
+  const [liveWaterPct, setLiveWaterPct] = useState(0);
+  const [speechBubble, setSpeechBubble] = useState<string | null>(null);
   const [careModalVisible, setCareModalVisible] = useState(false);
-  const [artFeedback, setArtFeedback] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    tone: 'default' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', tone: 'default' });
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
 
-  // Animações nativas na GPU (60fps, ZERO SVG)
-  const rainAnim = useRef(new Animated.Value(0)).current;
-  const fireflyAnim = useRef(new Animated.Value(0)).current;
-  const waterDropAnim = useRef(new Animated.Value(0)).current;
-  const plantBounce = useRef(new Animated.Value(1)).current;
+  const wobbleAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
   const xpFloatAnim = useRef(new Animated.Value(0)).current;
+  const holdTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
   const t = TRANSLATIONS[profile.language];
-
-  // Loop suave de chuva na janela
-  useEffect(() => {
-    if (activeMood !== 'rain') return;
-    rainAnim.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(rainAnim, {
-        toValue: 1,
-        duration: 950,
-        useNativeDriver: true,
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [activeMood, rainAnim]);
-
-  // Loop suave de vagalumes / estrelas à noite
-  useEffect(() => {
-    if (activeMood !== 'night') return;
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(fireflyAnim, {
-          toValue: 1,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fireflyAnim, {
-          toValue: 0,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [activeMood, fireflyAnim]);
+  const deleteCopy = DELETE_COPY[profile.language];
 
   const currentIndex = plants.findIndex((p) => p.id === plantId);
   const plant = plants[currentIndex];
+
+  useEffect(() => {
+    return () => {
+      if (holdTimerRef.current) clearInterval(holdTimerRef.current);
+      if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+    };
+  }, []);
+
   if (!plant) return null;
 
-  const isLowHp = plant.hp <= 45;
+  const curatedInfo = findCuratedSpecies(plant.species || plant.name);
+  const displayedHp = isHoldingWater
+    ? Math.min(100, Math.round(plant.hp + ((100 - plant.hp) * liveWaterPct) / 100))
+    : plant.hp;
+
+  const isLowHp = displayedHp <= 45;
   const isHydrated = plant.hp >= plant.maxHp;
-  const intervalDays = getWateringIntervalDays(plant.category);
-  const speciesKey = normalizeSpeciesKey(plant.species || plant.name);
-  const resolvedArt = plant.generatedArtUri || speciesArtCache[speciesKey];
+  const intervalDays =
+    curatedInfo?.wateringDays ?? getWateringIntervalDays(plant.category);
 
   const prevPlant =
     plants.length > 1
@@ -158,80 +145,131 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const nextPlant =
     plants.length > 1 ? plants[(currentIndex + 1) % plants.length] : null;
 
-  // Alterna o clima da janela ao tocar (útil para testar e demonstrar ao vivo!)
+  const showPlantSpeech = (text: string) => {
+    setSpeechBubble(text);
+    if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+    speechTimeoutRef.current = setTimeout(() => setSpeechBubble(null), 2600);
+  };
+
+  const handlePetPlant = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    Animated.sequence([
+      Animated.parallel([
+        Animated.spring(scaleAnim, {
+          toValue: 1.06,
+          friction: 3,
+          useNativeDriver: true,
+        }),
+        Animated.timing(wobbleAnim, {
+          toValue: 1,
+          duration: 110,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(wobbleAnim, {
+        toValue: -1,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.parallel([
+        Animated.spring(wobbleAnim, {
+          toValue: 0,
+          friction: 4,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 4,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+
+    const moodMsg = isLowHp
+      ? curatedInfo?.cozyMoodThirsty || 'Estou com um pouquinho de sede...'
+      : curatedInfo?.cozyMoodHealthy || 'Folhinhas felizes com seu carinho!';
+    showPlantSpeech(moodMsg);
+  };
+
+  const startHoldWater = () => {
+    if (isHydrated) return;
+    setIsHoldingWater(true);
+    setLiveWaterPct(8);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    let pct = 8;
+    holdTimerRef.current = setInterval(() => {
+      pct += 12;
+      if (pct >= 100) {
+        if (holdTimerRef.current) clearInterval(holdTimerRef.current);
+        holdTimerRef.current = null;
+        setLiveWaterPct(100);
+        finishWatering();
+      } else {
+        setLiveWaterPct(pct);
+        Haptics.selectionAsync();
+      }
+    }, 110);
+  };
+
+  const cancelHoldWater = () => {
+    if (holdTimerRef.current) {
+      clearInterval(holdTimerRef.current);
+      holdTimerRef.current = null;
+      setIsHoldingWater(false);
+      setLiveWaterPct(0);
+    }
+  };
+
+  const finishWatering = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    xpFloatAnim.setValue(0);
+
+    Animated.parallel([
+      Animated.sequence([
+        Animated.spring(scaleAnim, {
+          toValue: 1.1,
+          friction: 3,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 4,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(xpFloatAnim, {
+        toValue: 1,
+        duration: 900,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      waterPlant(plant.id);
+      setIsHoldingWater(false);
+      setLiveWaterPct(0);
+      setCareModalVisible(true);
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setDeleteModalVisible(false);
+    removePlant(plant.id);
+    onBack();
+  };
+
   const cycleWeatherMood = () => {
+    Haptics.selectionAsync();
     const order: WeatherMood[] = ['sunny', 'rain', 'night'];
     const nextIdx = (order.indexOf(activeMood) + 1) % order.length;
     setMoodOverride(order[nextIdx]);
   };
 
-  const handleWater = () => {
-    if (isHydrated || isWatering) return;
-    setIsWatering(true);
-    waterDropAnim.setValue(0);
-    xpFloatAnim.setValue(0);
-
-    // 1. Gotinhas d'água caindo sobre a planta
-    Animated.timing(waterDropAnim, {
-      toValue: 1,
-      duration: 1050,
-      useNativeDriver: true,
-    }).start();
-
-    // 2. Pulinho elástico alegre da planta + "+20 XP" subindo
-    Animated.sequence([
-      Animated.delay(300),
-      Animated.parallel([
-        Animated.sequence([
-          Animated.spring(plantBounce, {
-            toValue: 1.09,
-            friction: 4,
-            useNativeDriver: true,
-          }),
-          Animated.spring(plantBounce, {
-            toValue: 1,
-            friction: 5,
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.timing(xpFloatAnim, {
-          toValue: 1,
-          duration: 950,
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start(() => {
-      waterPlant(plant.id);
-      setIsWatering(false);
-      setCareModalVisible(true);
-    });
-  };
-
-  const handleGenerateArt = async () => {
-    if (generatingArt) return;
-    setGeneratingArt(true);
-    const res = await generateGhibliPlantArtDetailed(
-      plant.species || plant.name
-    );
-    setGeneratingArt(false);
-
-    if (res.ok) {
-      setSpeciesArt(plant.species || plant.name, res.uri);
-      setArtFeedback({
-        visible: true,
-        title: t.artGeneratedTitle,
-        message: t.artGeneratedMsg,
-        tone: 'success',
-      });
-    } else {
-      setArtFeedback({
-        visible: true,
-        title: t.artErrorTitle,
-        message: res.error,
-        tone: 'danger',
-      });
-    }
-  };
+  const wobbleRotate = wobbleAnim.interpolate({
+    inputRange: [-1, 1],
+    outputRange: ['-3.5deg', '3.5deg'],
+  });
 
   const moodMeta = {
     sunny: {
@@ -265,179 +303,113 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           {t.myPlant}
         </Text>
 
-        <TouchableOpacity
-          onPress={handleGenerateArt}
-          disabled={generatingArt}
-          style={[styles.circleBtn, { backgroundColor: colors.surfaceAlt }]}
-        >
-          {generatingArt ? (
-            <ActivityIndicator size="small" color={colors.mossPrimary} />
-          ) : (
+        {/* Ações no topo direito: Pet Safe + Excluir */}
+        <View style={styles.headerRightGroup}>
+          <TouchableOpacity
+            onPress={() =>
+              showPlantSpeech(
+                curatedInfo?.petSafe
+                  ? 'Espécie segura para cães e gatos!'
+                  : 'Atenção: mantenha fora do alcance de pets.'
+              )
+            }
+            style={[styles.circleBtn, { backgroundColor: colors.surfaceAlt }]}
+          >
             <Ionicons
-              name="sparkles-outline"
+              name="paw-outline"
               size={18}
-              color={colors.mossPrimary}
+              color={
+                curatedInfo?.petSafe ? colors.mossPrimary : colors.terracotta
+              }
             />
-          )}
-        </TouchableOpacity>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setDeleteModalVisible(true)}
+            style={[
+              styles.circleBtn,
+              { backgroundColor: colors.terracottaSoft },
+            ]}
+          >
+            <Ionicons
+              name="trash-outline"
+              size={18}
+              color={colors.terracotta}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Palco Interativo de Jogo Ghibli (Clima ao vivo + Animação de Rega, ZERO SVG) */}
-        <View
+        {/* Palco Interativo */}
+        <Pressable
+          onPress={handlePetPlant}
           style={[
             styles.artworkCard,
             { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
           ]}
         >
-          <Animated.View
-            style={[
-              styles.sceneFull,
-              { transform: [{ scale: plantBounce }] },
-            ]}
+          <ImageBackground
+            source={require('../../assets/ghibli/greenhouse_bg.png')}
+            style={styles.artworkBackdrop}
+            blurRadius={4}
+            resizeMode="cover"
           >
-            {resolvedArt ? (
-              <PlantIllustration
-                category={plant.category}
-                species={plant.species}
-                generatedArtUri={resolvedArt}
-                isLowHp={isLowHp}
-                size="large"
-              />
-            ) : (
-              <ImageBackground
-                source={require('../../assets/ghibli/greenhouse_bg.png')}
-                style={styles.artworkBackdrop}
-                blurRadius={4}
-                resizeMode="cover"
-              >
-                <View style={styles.artworkVeil}>
-                  <PlantIllustration
-                    category={plant.category}
-                    species={plant.species}
-                    isLowHp={isLowHp}
-                    size="large"
-                  />
-                </View>
-              </ImageBackground>
-            )}
-          </Animated.View>
-
-          {/* Camada Atmosférica de Iluminação (Sol / Chuva / Noite) */}
-          <View
-            pointerEvents="none"
-            style={[styles.moodOverlay, { backgroundColor: moodMeta.veil }]}
-          />
-
-          {/* Partículas de Chuva Real na Janela (Zero SVG) */}
-          {activeMood === 'rain' && (
-            <View pointerEvents="none" style={styles.particlesLayer}>
-              {RAIN_STREAKS.map((drop, i) => {
-                const translateY = rainAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [-40 - i * 15, 320],
-                });
-                return (
-                  <Animated.View
-                    key={`rain-${i}`}
-                    style={[
-                      styles.rainDrop,
-                      {
-                        left: drop.left as any,
-                        transform: [{ translateY }, { rotate: '12deg' }],
-                      },
-                    ]}
-                  />
-                );
-              })}
-            </View>
-          )}
-
-          {/* Vagalumes / Brilho Noturno Ghibli (Zero SVG) */}
-          {activeMood === 'night' && (
-            <View pointerEvents="none" style={styles.particlesLayer}>
-              {FIREFLIES.map((fly, i) => {
-                const opacity = fireflyAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: i % 2 === 0 ? [0.2, 0.95] : [0.9, 0.25],
-                });
-                const translateY = fireflyAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0, i % 2 === 0 ? -10 : 10],
-                });
-                return (
-                  <Animated.View
-                    key={`fly-${i}`}
-                    style={[
-                      styles.firefly,
-                      {
-                        left: fly.left as any,
-                        top: fly.top as any,
-                        opacity,
-                        transform: [{ translateY }],
-                      },
-                    ]}
-                  />
-                );
-              })}
-            </View>
-          )}
-
-          {/* Animação Interativa de Rega: Gotas + "+20 XP" Flutuante */}
-          {isWatering && (
-            <View pointerEvents="none" style={styles.particlesLayer}>
-              {WATER_DROPS.map((drop, idx) => {
-                const translateY = waterDropAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [24 + idx * 8, 220],
-                });
-                const opacity = waterDropAnim.interpolate({
-                  inputRange: [0, 0.2, 0.85, 1],
-                  outputRange: [0, 1, 1, 0],
-                });
-                return (
-                  <Animated.View
-                    key={`wdrop-${idx}`}
-                    style={[
-                      styles.waterDroplet,
-                      {
-                        left: drop.left as any,
-                        opacity,
-                        transform: [{ translateY }],
-                      },
-                    ]}
-                  />
-                );
-              })}
-
+            <View
+              style={[
+                styles.artworkVeil,
+                { backgroundColor: moodMeta.veil },
+              ]}
+            >
               <Animated.View
-                style={[
-                  styles.floatingXpBadge,
-                  {
-                    opacity: xpFloatAnim.interpolate({
-                      inputRange: [0, 0.2, 0.8, 1],
-                      outputRange: [0, 1, 1, 0],
-                    }),
-                    transform: [
-                      {
-                        translateY: xpFloatAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [20, -45],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
+                style={{
+                  transform: [{ scale: scaleAnim }, { rotate: wobbleRotate }],
+                }}
               >
-                <Text style={styles.floatingXpText}>+20 XP</Text>
+                <PlantIllustration
+                  category={plant.category}
+                  species={plant.species}
+                  isLowHp={isLowHp}
+                  size="large"
+                />
               </Animated.View>
             </View>
+          </ImageBackground>
+
+          {speechBubble && (
+            <View style={styles.speechBubble}>
+              <Text style={styles.speechText}>{speechBubble}</Text>
+            </View>
           )}
 
-          {/* Badge Esquerdo: "% saudável" */}
+          {liveWaterPct === 100 && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.floatingXpBadge,
+                {
+                  opacity: xpFloatAnim.interpolate({
+                    inputRange: [0, 0.2, 0.85, 1],
+                    outputRange: [0, 1, 1, 0],
+                  }),
+                  transform: [
+                    {
+                      translateY: xpFloatAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [15, -45],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <Text style={styles.floatingXpText}>+20 XP</Text>
+            </Animated.View>
+          )}
+
           <View style={styles.healthPill}>
             <Ionicons
               name="leaf-outline"
@@ -450,12 +422,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
                 { color: isLowHp ? '#A95138' : '#1F3A2E' },
               ]}
             >
-              {plant.hp}%{' '}
+              {displayedHp}%{' '}
               {isLowHp ? t.drySoil.toLowerCase() : t.healthy.toLowerCase()}
             </Text>
           </View>
 
-          {/* Badge Direito Interativo: Clima da Janela (toque para alternar Sol / Chuva / Noite) */}
           <TouchableOpacity
             onPress={cycleWeatherMood}
             activeOpacity={0.85}
@@ -464,6 +435,14 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
             <Ionicons name={moodMeta.icon} size={14} color="#1F3A2E" />
             <Text style={styles.weatherPillText}>{moodMeta.label}</Text>
           </TouchableOpacity>
+
+          {!speechBubble && (
+            <View style={styles.petHintPill}>
+              <Text style={styles.petHintText}>
+                Toque na planta para interagir
+              </Text>
+            </View>
+          )}
 
           {prevPlant && (
             <TouchableOpacity
@@ -481,7 +460,7 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
               <Ionicons name="chevron-forward" size={18} color="#1F3A2E" />
             </TouchableOpacity>
           )}
-        </View>
+        </Pressable>
 
         <Text style={[styles.plantTitle, { color: colors.textPrimary }]}>
           {plant.name}
@@ -534,7 +513,7 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
               </Text>
             </View>
             <Text style={[styles.metricValue, { color: colors.textPrimary }]}>
-              {getLightLabel(plant.category, profile.language)}
+              {getLightLabel(plant.species, plant.category, profile.language)}
             </Text>
           </View>
 
@@ -562,7 +541,7 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
                 { color: isLowHp ? colors.terracotta : colors.textPrimary },
               ]}
             >
-              {plant.hp}% HP
+              {displayedHp}% HP
             </Text>
           </View>
         </View>
@@ -591,37 +570,72 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           </Text>
         </View>
 
-        <TouchableOpacity
-          onPress={handleWater}
-          disabled={isHydrated || isWatering}
-          activeOpacity={0.85}
+        {/* Botão Segurar para Regar */}
+        <Pressable
+          onPressIn={startHoldWater}
+          onPressOut={cancelHoldWater}
+          disabled={isHydrated}
           style={[
-            styles.ctaBtn,
+            styles.holdCtaBtn,
             {
               backgroundColor: isHydrated
                 ? colors.surfaceAlt
                 : profile.darkMode
-                ? colors.mossPrimary
-                : colors.mossDeep,
+                ? '#24352D'
+                : '#1F3A2E',
             },
           ]}
         >
+          {isHoldingWater && (
+            <View
+              style={[
+                styles.holdProgressFill,
+                { width: `${liveWaterPct}%` },
+              ]}
+            />
+          )}
+          <Ionicons
+            name="water"
+            size={18}
+            color={isHydrated ? colors.textSecondary : '#FFFFFF'}
+            style={{ zIndex: 2 }}
+          />
           <Text
             style={[
               styles.ctaText,
-              { color: isHydrated ? colors.textSecondary : '#FFFFFF' },
+              {
+                color: isHydrated ? colors.textSecondary : '#FFFFFF',
+                zIndex: 2,
+              },
             ]}
           >
             {isHydrated
               ? t.hydrated
-              : isWatering
-              ? t.watering
-              : `${t.waterNow} · +20 XP`}
+              : isHoldingWater
+              ? `${t.watering} ${liveWaterPct}%`
+              : `Segure para regar · +20 XP`}
+          </Text>
+        </Pressable>
+
+        {/* Botão explícito de Excluir no rodapé */}
+        <TouchableOpacity
+          onPress={() => setDeleteModalVisible(true)}
+          activeOpacity={0.8}
+          style={[
+            styles.deleteFooterBtn,
+            {
+              backgroundColor: colors.terracottaSoft,
+              borderColor: colors.terracotta,
+            },
+          ]}
+        >
+          <Ionicons name="trash-outline" size={17} color={colors.terracotta} />
+          <Text style={[styles.deleteFooterText, { color: colors.terracotta }]}>
+            {deleteCopy.btnLabel}
           </Text>
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Modal "Cuidado registrado." */}
       <Modal visible={careModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View
@@ -666,13 +680,16 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
       </Modal>
 
       <ThemedModal
-        visible={artFeedback.visible}
-        title={artFeedback.title}
-        message={artFeedback.message}
-        tone={artFeedback.tone}
+        visible={deleteModalVisible}
+        title={deleteCopy.title}
+        message={deleteCopy.message(plant.name)}
+        icon="trash-outline"
+        tone="danger"
         isDark={profile.darkMode}
-        confirmLabel="OK"
-        onConfirm={() => setArtFeedback((p) => ({ ...p, visible: false }))}
+        cancelLabel={t.cancel}
+        confirmLabel={deleteCopy.confirm}
+        onCancel={() => setDeleteModalVisible(false)}
+        onConfirm={handleConfirmDelete}
       />
     </SafeAreaView>
   );
@@ -687,6 +704,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 12,
   },
+  headerRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   circleBtn: {
     width: 40,
     height: 40,
@@ -695,54 +717,55 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerTitle: { fontSize: 17, fontWeight: '700' },
-  content: { paddingHorizontal: 20, paddingBottom: 34 },
+  content: { paddingHorizontal: 20, paddingBottom: 40 },
   artworkCard: {
-    height: 310,
+    height: 318,
     borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     marginBottom: 18,
     position: 'relative',
   },
-  sceneFull: { flex: 1, width: '100%', height: '100%' },
   artworkBackdrop: { flex: 1, width: '100%', height: '100%' },
   artworkVeil: {
     flex: 1,
-    backgroundColor: 'rgba(246, 243, 236, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  moodOverlay: {
-    ...StyleSheet.absoluteFill,
-  },
-  particlesLayer: {
-    ...StyleSheet.absoluteFill,
-    overflow: 'hidden',
-  },
-  rainDrop: {
+  speechBubble: {
     position: 'absolute',
-    width: 2.5,
-    height: 26,
-    borderRadius: 2,
-    backgroundColor: 'rgba(218, 238, 250, 0.72)',
-  },
-  firefly: {
-    position: 'absolute',
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: '#FFF3B0',
-    shadowColor: '#FFE57F',
-    shadowOpacity: 0.95,
+    bottom: 14,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 16,
+    alignItems: 'center',
+    shadowColor: '#1F3A2E',
+    shadowOpacity: 0.18,
     shadowRadius: 8,
     elevation: 4,
   },
-  waterDroplet: {
+  speechText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1F3A2E',
+    textAlign: 'center',
+  },
+  petHintPill: {
     position: 'absolute',
-    width: 9,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(125, 206, 240, 0.92)',
+    bottom: 12,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(31, 58, 46, 0.72)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  petHintText: {
+    color: '#FAF7F0',
+    fontSize: 11,
+    fontWeight: '600',
   },
   floatingXpBadge: {
     position: 'absolute',
@@ -826,12 +849,38 @@ const styles = StyleSheet.create({
   },
   nextCareMain: { fontSize: 15, fontWeight: '700' },
   nextCareSub: { fontSize: 12.5, marginTop: 4 },
-  ctaBtn: {
+  holdCtaBtn: {
     paddingVertical: 16,
     borderRadius: 16,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  holdProgressFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#3D6249',
   },
   ctaText: { fontSize: 15.5, fontWeight: '700' },
+  deleteFooterBtn: {
+    marginTop: 12,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  deleteFooterText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(18, 28, 22, 0.52)',
