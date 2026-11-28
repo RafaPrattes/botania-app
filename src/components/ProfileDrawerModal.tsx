@@ -9,12 +9,23 @@ import {
   Switch,
   StyleSheet,
   ScrollView,
+  Share, // Corrected import statement
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
-import * as DocumentPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
+
+const getDocumentPicker = () => {
+  try {
+    return require('expo-document-picker') as {
+      getDocumentAsync: (options: { type: string }) => Promise<{
+        canceled: boolean;
+        assets?: { uri: string }[];
+      }>;
+    };
+  } catch {
+    return null;
+  }
+};
 import { usePlantStore } from '../store/usePlantStore';
 import { AppLanguage, PALETTES, TRANSLATIONS } from '../theme/theme';
 import { ThemedModal } from './ThemedModal';
@@ -67,14 +78,7 @@ export const ProfileDrawerModal: React.FC<ProfileDrawerModalProps> = ({
   const handleExportBackup = async () => {
     try {
       const json = exportBackupJson();
-      const fileUri = `${FileSystem.cacheDirectory}botania-backup.json`;
-      await FileSystem.writeAsStringAsync(fileUri, json);
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(fileUri, {
-          mimeType: 'application/json',
-          dialogTitle: 'Salvar Backup do BotanIA',
-        });
-      }
+      await Share.share({ message: json, title: 'Backup do BotanIA' });
     } catch {
       setFeedbackModal({
         visible: true,
@@ -89,11 +93,13 @@ export const ProfileDrawerModal: React.FC<ProfileDrawerModalProps> = ({
 
   const handleImportBackup = async () => {
     try {
-      const doc = await DocumentPicker.getDocumentAsync({
+      const documentPicker = getDocumentPicker();
+      if (!documentPicker) throw new Error('Document picker unavailable');
+      const doc = await documentPicker.getDocumentAsync({
         type: 'application/json',
       });
-      if (doc.canceled || !doc.assets[0]?.uri) return;
-      const content = await FileSystem.readAsStringAsync(doc.assets[0].uri);
+      if (doc.canceled || !doc.assets?.[0]?.uri) return;
+      const content = await (await fetch(doc.assets[0].uri)).text();
       const ok = importBackupJson(content);
       setFeedbackModal({
         visible: true,

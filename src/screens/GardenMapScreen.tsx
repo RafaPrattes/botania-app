@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Linking,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -22,20 +23,18 @@ interface NearbyGardenPlace {
   id: string;
   name: string;
   tagline: string;
-  neighborhood: string;
+  address: string;
   lat: number;
   lng: number;
   distanceKm: number;
   photoUrl: string;
+  mapsUrl: string;
+  rating?: number;
   isSupplies?: boolean;
+  hasRealStorePhoto?: boolean;
 }
 
-const EDITORIAL_PHOTOS = [
-  'https://images.unsplash.com/photo-1466781783364-36c955e42a7f?auto=format&fit=crop&w=900&q=80',
-  'https://images.unsplash.com/photo-1470058869958-2a77ade41c02?auto=format&fit=crop&w=900&q=80',
-  'https://images.unsplash.com/photo-1459156212016-c812468e2115?auto=format&fit=crop&w=900&q=80',
-  'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?auto=format&fit=crop&w=900&q=80',
-];
+const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim();
 
 function getDistanceKm(
   lat1: number,
@@ -55,13 +54,20 @@ function getDistanceKm(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Gera uma prévia real do mapa/localização da loja (Esri World Imagery / Street) quando não há chave do Google Places
+function buildLocationPreviewPhoto(lat: number, lng: number): string {
+  const delta = 0.0035;
+  const bbox = `${lng - delta},${lat - delta},${lng + delta},${lat + delta}`;
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/export?bbox=${bbox}&bboxSR=4326&size=800,450&imageSR=4326&format=png&f=image`;
+}
+
 export const GardenMapScreen: React.FC = () => {
   const profile = usePlantStore((s) => s.profile);
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
   const t = TRANSLATIONS[profile.language];
 
   const [loading, setLoading] = useState(true);
-  const [cityLabel, setCityLabel] = useState('São Paulo, SP');
+  const [cityLabel, setCityLabel] = useState('Localizando...');
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState<'near' | 'supplies' | 'map'>(
     'near'
@@ -72,66 +78,186 @@ export const GardenMapScreen: React.FC = () => {
   const [places, setPlaces] = useState<NearbyGardenPlace[]>([]);
   const [selectedPlace, setSelectedPlace] =
     useState<NearbyGardenPlace | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadNearbyPlaces();
-  }, []);
+  // Busca real usando Google Places API (New) -> Fotos reais + Endereço real + Link oficial do Google Maps
+  const fetchWithGooglePlaces = async (
+    lat: number,
+    lng: number,
+    keyword: string
+  ): Promise<NearbyGardenPlace[] | null> => {
+    if (!GOOGLE_MAPS_KEY) return null;
 
-  const loadNearbyPlaces = async () => {
-    setLoading(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLoading(false);
-        return;
-      }
-
-      const loc = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = loc.coords;
-      setCoords({ lat: latitude, lng: longitude });
-
-      // Detecta cidade e estado reais do usuário para o campo de busca
-      try {
-        const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
-        if (geo[0]) {
-          const city = geo[0].city || geo[0].subregion || 'Sua região';
-          const region = geo[0].region || '';
-          setCityLabel(region ? `${city}, ${region}` : city);
+      const response = await fetch(
+        'https://places.googleapis.com/v1/places:searchText',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_MAPS_KEY,
+            'X-Goog-FieldMask':
+              'places.id,places.displayName,places.formattedAddress,places.location,places.googleMapsUri,places.photos,places.rating,places.primaryTypeDisplayName',
+          },
+          body: JSON.stringify({
+            textQuery: keyword,
+            languageCode: profile.language === 'en' ? 'en' : 'pt-BR',
+            maxResultCount: 10,
+            locationBias: {
+              circle: {
+                center: { latitude: lat, longitude: lng },
+                radius: 8000.0,
+              },
+            },
+          }),
         }
-      } catch {
-        // Mantém rótulo padrão
+      );
+
+      const data = await response.json();
+      if (!Array.isArray(data?.places) || data.places.length === 0) return null;
+
+      return data.places
+        .map((p: any) => {
+          const pLat = p.location?.latitude ?? lat;
+          const pLng = p.location?.longitude ?? lng;
+          const photoName = p.photos?.[0]?.name;
+          const realPhotoUrl = photoName
+            ? `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=900&key=${GOOGLE_MAPS_KEY}`
+            : buildLocationPreviewPhoto(pLat, pLng);
+
+          return {
+            id: p.id,
+            name: p.displayName?.text || 'Garden Center',
+            tagline:
+              p.primaryTypeDisplayName?.text ||
+              'Plantas, vasos e cuidados botânicos',
+            address: p.formattedAddress || cityLabel,
+            lat: pLat,
+            lng: pLng,
+            distanceKm: getDistanceKm(lat, lng, pLat, pLng),
+            photoUrl: realPhotoUrl,
+            mapsUrl:
+              p.googleMapsUri ||
+              `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                `${p.displayName?.text} ${p.formattedAddress || ''}`
+              )}`,
+            rating: p.rating,
+            isSupplies: keyword.toLowerCase().includes('vaso'),
+            hasRealStorePhoto: Boolean(photoName),
+          };
+        })
+        .sort(
+          (a: NearbyGardenPlace, b: NearbyGardenPlace) =>
+            a.distanceKm - b.distanceKm
+        );
+    } catch {
+      return null;
+    }
+  };
+
+  // Busca real gratuita (Nominatim + Overpass OpenStreetMap) com endereço real + link real no Google Maps
+  const fetchWithOpenStreetMap = async (
+    lat: number,
+    lng: number,
+    term: string
+  ): Promise<NearbyGardenPlace[]> => {
+    const delta = 0.08; // ~8km ao redor
+    const viewbox = `${lng - delta},${lat + delta},${lng + delta},${lat - delta}`;
+
+    // 1. Nominatim (muito mais estável e rápido que Overpass!)
+    try {
+      const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=12&bounded=1&viewbox=${viewbox}&q=${encodeURIComponent(
+        term
+      )}`;
+      const res = await fetch(nomUrl, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'BotanIAApp/1.0 (https://github.com/RafaPrattes/botania-app)',
+        },
+      });
+      const list = await res.json();
+
+      if (Array.isArray(list) && list.length > 0) {
+        return list
+          .map((item: any) => {
+            const pLat = parseFloat(item.lat);
+            const pLng = parseFloat(item.lon);
+            const addr = item.address || {};
+            const street = [addr.road, addr.house_number]
+              .filter(Boolean)
+              .join(', ');
+            const district =
+              addr.suburb || addr.neighbourhood || addr.city || addr.town || '';
+            const fullAddress =
+              [street, district].filter(Boolean).join(' • ') ||
+              item.display_name.split(',').slice(0, 3).join(',');
+            const name =
+              item.name ||
+              item.display_name.split(',')[0] ||
+              'Floricultura';
+
+            return {
+              id: String(item.place_id),
+              name,
+              tagline:
+                item.type === 'garden_centre'
+                  ? 'Garden Center • Plantas, vasos e substratos'
+                  : 'Floricultura & Plantas ornamentais',
+              address: fullAddress,
+              lat: pLat,
+              lng: pLng,
+              distanceKm: getDistanceKm(lat, lng, pLat, pLng),
+              photoUrl: buildLocationPreviewPhoto(pLat, pLng),
+              mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                `${name}, ${fullAddress}`
+              )}`,
+              isSupplies: item.type === 'garden_centre',
+            };
+          })
+          .sort(
+            (a: NearbyGardenPlace, b: NearbyGardenPlace) =>
+              a.distanceKm - b.distanceKm
+          );
       }
+    } catch {
+      // Continua para Overpass
+    }
 
-      const overpassQuery = `[out:json][timeout:10];(node["shop"~"florist|garden_centre"](around:7000,${latitude},${longitude});way["shop"~"florist|garden_centre"](around:7000,${latitude},${longitude});node["landuse"="plant_nursery"](around:7000,${latitude},${longitude}););out center 15;`;
-
+    // 2. Fallback Overpass caso Nominatim não retorne na área
+    try {
+      const overpassQuery = `[out:json][timeout:10];(node["shop"~"florist|garden_centre"](around:8000,${lat},${lng});way["shop"~"florist|garden_centre"](around:8000,${lat},${lng}););out center 15;`;
       const res = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
         body: `data=${encodeURIComponent(overpassQuery)}`,
       });
       const data = await res.json();
-
-      if (Array.isArray(data?.elements) && data.elements.length > 0) {
-        const mapped: NearbyGardenPlace[] = data.elements
-          .map((el: any, idx: number) => {
+      if (Array.isArray(data?.elements)) {
+        return data.elements
+          .map((el: any) => {
             const pLat = el.lat ?? el.center?.lat;
             const pLng = el.lon ?? el.center?.lon;
             if (!pLat || !pLng) return null;
-            const isGardenCenter = el.tags?.shop === 'garden_centre';
-            const street = el.tags?.['addr:street'];
-            const suburb = el.tags?.['addr:suburb'];
+            const name = el.tags?.name || 'Floricultura Local';
+            const addr =
+              [el.tags?.['addr:street'], el.tags?.['addr:suburb']]
+                .filter(Boolean)
+                .join(' • ') || cityLabel;
             return {
               id: String(el.id),
-              name: el.tags?.name || 'Viveiro & Floricultura Local',
-              tagline: isGardenCenter
-                ? 'Plantas tropicais, vasos de cerâmica e substratos.'
-                : 'Plantas, vasos e boas conversas.',
-              neighborhood:
-                suburb || street || cityLabel || 'Perto da sua localização',
+              name,
+              tagline:
+                el.tags?.shop === 'garden_centre'
+                  ? 'Garden Center • Plantas e vasos'
+                  : 'Floricultura & Plantas',
+              address: addr,
               lat: pLat,
               lng: pLng,
-              distanceKm: getDistanceKm(latitude, longitude, pLat, pLng),
-              photoUrl: EDITORIAL_PHOTOS[idx % EDITORIAL_PHOTOS.length],
-              isSupplies: isGardenCenter,
+              distanceKm: getDistanceKm(lat, lng, pLat, pLng),
+              photoUrl: buildLocationPreviewPhoto(pLat, pLng),
+              mapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                `${name} @${pLat},${pLng}`
+              )}`,
+              isSupplies: el.tags?.shop === 'garden_centre',
             };
           })
           .filter(Boolean)
@@ -139,34 +265,110 @@ export const GardenMapScreen: React.FC = () => {
             (a: NearbyGardenPlace, b: NearbyGardenPlace) =>
               a.distanceKm - b.distanceKm
           );
-
-        setPlaces(mapped);
       }
     } catch {
-      // Fallback elegante silencioso
-    } finally {
-      setLoading(false);
+      // Sem resultados
+    }
+
+    return [];
+  };
+
+  const runNearbySearch = useCallback(
+    async (mode: 'near' | 'supplies', customQuery?: string) => {
+      setLoading(true);
+      setStatusError(null);
+      Keyboard.dismiss();
+
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setStatusError(
+            'Ative o GPS para listar floriculturas e garden centers reais perto de você.'
+          );
+          setLoading(false);
+          return;
+        }
+
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const { latitude, longitude } = loc.coords;
+        setCoords({ lat: latitude, lng: longitude });
+
+        let detectedCity = cityLabel;
+        try {
+          const geo = await Location.reverseGeocodeAsync({
+            latitude,
+            longitude,
+          });
+          if (geo[0]) {
+            const c = geo[0].city || geo[0].subregion || 'Sua região';
+            const r = geo[0].region || '';
+            detectedCity = r ? `${c}, ${r}` : c;
+            setCityLabel(detectedCity);
+          }
+        } catch {
+          // Mantém rótulo anterior
+        }
+
+        const queryTerm = customQuery?.trim()
+          ? `${customQuery.trim()} floricultura garden center`
+          : mode === 'supplies'
+          ? 'garden center plantas vasos substrato'
+          : 'floricultura garden center plantas';
+
+        // 1. Tenta Google Places API (New) com fotos reais de fachada
+        const googleResults = await fetchWithGooglePlaces(
+          latitude,
+          longitude,
+          queryTerm
+        );
+        if (googleResults && googleResults.length > 0) {
+          setPlaces(googleResults);
+          setLoading(false);
+          return;
+        }
+
+        // 2. Fallback gratuito real (Nominatim + Overpass) com endereços reais
+        const osmResults = await fetchWithOpenStreetMap(
+          latitude,
+          longitude,
+          customQuery?.trim() || (mode === 'supplies' ? 'garden' : 'floricultura')
+        );
+
+        setPlaces(osmResults);
+        if (osmResults.length === 0) {
+          setStatusError(
+            `Nenhum garden center mapeado em ${detectedCity} via OpenStreetMap. Toque abaixo para ver todos no Google Maps.`
+          );
+        }
+      } catch {
+        setStatusError(
+          'Não foi possível buscar sua localização agora. Tente tocar em atualizar.'
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [cityLabel, profile.language]
+  );
+
+  useEffect(() => {
+    runNearbySearch('near');
+  }, []);
+
+  const handleSelectFilter = (tab: 'near' | 'supplies' | 'map') => {
+    setActiveTab(tab);
+    if (tab === 'near') {
+      setSearchText('');
+      runNearbySearch('near');
+    } else if (tab === 'supplies') {
+      runNearbySearch('supplies', searchText);
     }
   };
 
-  const filteredPlaces = useMemo(() => {
-    let base = places;
-    if (activeTab === 'supplies') {
-      const onlySupplies = places.filter((p) => p.isSupplies);
-      base = onlySupplies.length > 0 ? onlySupplies : places;
-    }
-    const q = searchText.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.neighborhood.toLowerCase().includes(q)
-    );
-  }, [places, activeTab, searchText]);
-
   const openRoute = (place: NearbyGardenPlace) => {
-    const query = `${encodeURIComponent(place.name)}@${place.lat},${place.lng}`;
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
+    Linking.openURL(place.mapsUrl);
   };
 
   const mapHtml = useMemo(() => {
@@ -213,7 +415,6 @@ export const GardenMapScreen: React.FC = () => {
       style={[styles.container, { backgroundColor: colors.bg }]}
       edges={['top']}
     >
-      {/* Header Editorial */}
       <View style={styles.header}>
         <View>
           <Text style={[styles.eyebrow, { color: colors.mossMuted }]}>
@@ -224,14 +425,19 @@ export const GardenMapScreen: React.FC = () => {
           </Text>
         </View>
         <TouchableOpacity
-          onPress={loadNearbyPlaces}
+          onPress={() =>
+            runNearbySearch(
+              activeTab === 'supplies' ? 'supplies' : 'near',
+              searchText
+            )
+          }
           style={[styles.circleBtn, { backgroundColor: colors.surfaceAlt }]}
         >
           <Ionicons name="refresh" size={18} color={colors.textPrimary} />
         </TouchableOpacity>
       </View>
 
-      {/* Campo de Busca / Cidade Atual */}
+      {/* Busca Real por Cidade, Bairro ou Nome */}
       <View style={styles.searchWrap}>
         <View
           style={[
@@ -247,23 +453,37 @@ export const GardenMapScreen: React.FC = () => {
           <TextInput
             style={[styles.searchInput, { color: colors.textPrimary }]}
             placeholder={cityLabel || t.mapSearchPlaceholder}
-            placeholderTextColor={colors.textPrimary}
+            placeholderTextColor={colors.textSecondary}
             value={searchText}
             onChangeText={setSearchText}
+            returnKeyType="search"
+            onSubmitEditing={() =>
+              runNearbySearch(
+                activeTab === 'supplies' ? 'supplies' : 'near',
+                searchText
+              )
+            }
           />
           {searchText.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchText('')}>
+            <TouchableOpacity
+              onPress={() =>
+                runNearbySearch(
+                  activeTab === 'supplies' ? 'supplies' : 'near',
+                  searchText
+                )
+              }
+            >
               <Ionicons
-                name="close-circle"
-                size={18}
-                color={colors.textSecondary}
+                name="arrow-forward-circle"
+                size={22}
+                color={colors.mossPrimary}
               />
             </TouchableOpacity>
           )}
         </View>
       </View>
 
-      {/* Pílulas de Filtro (Perto de mim / Plantas e vasos / Mapa ao vivo) */}
+      {/* Pílulas de Filtro (Agora disparam busca real!) */}
       <View style={styles.filterRow}>
         {(
           [
@@ -276,7 +496,7 @@ export const GardenMapScreen: React.FC = () => {
           return (
             <TouchableOpacity
               key={tab.key}
-              onPress={() => setActiveTab(tab.key)}
+              onPress={() => handleSelectFilter(tab.key)}
               style={[
                 styles.filterPill,
                 {
@@ -301,7 +521,6 @@ export const GardenMapScreen: React.FC = () => {
         })}
       </View>
 
-      {/* Modo Mapa ao Vivo */}
       {activeTab === 'map' ? (
         <View style={[styles.liveMapCard, { borderColor: colors.border }]}>
           {coords ? (
@@ -318,74 +537,77 @@ export const GardenMapScreen: React.FC = () => {
             </View>
           )}
         </View>
+      ) : loading ? (
+        <View style={styles.centerBox}>
+          <ActivityIndicator size="large" color={colors.mossPrimary} />
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+            {t.mapEmptyNote}
+          </Text>
+        </View>
       ) : (
         <FlatList
-          data={filteredPlaces}
+          data={places}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
-            <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>
-              {t.mapSectionTitle}
-            </Text>
+            <View style={styles.listHeaderRow}>
+              <Text
+                style={[styles.sectionTitle, { color: colors.textPrimary }]}
+              >
+                {t.mapSectionTitle}
+              </Text>
+              <Text style={[styles.countText, { color: colors.textSecondary }]}>
+                {places.length} locais
+              </Text>
+            </View>
           }
           ListEmptyComponent={
-            loading ? (
-              <View style={styles.centerBox}>
-                <ActivityIndicator size="large" color={colors.mossPrimary} />
-                <Text
-                  style={[styles.emptyText, { color: colors.textSecondary }]}
-                >
-                  {t.mapEmptyNote}
-                </Text>
-              </View>
-            ) : (
-              <View
+            <View
+              style={[
+                styles.editorialCard,
+                {
+                  backgroundColor: colors.surface,
+                  borderColor: colors.border,
+                  padding: 22,
+                  alignItems: 'center',
+                },
+              ]}
+            >
+              <Ionicons
+                name="location-outline"
+                size={28}
+                color={colors.mossPrimary}
+              />
+              <Text
                 style={[
-                  styles.editorialCard,
+                  styles.emptyText,
+                  { color: colors.textSecondary, marginVertical: 10 },
+                ]}
+              >
+                {statusError || t.mapEmptyNote}
+              </Text>
+              <TouchableOpacity
+                onPress={() =>
+                  Linking.openURL(
+                    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                      `garden center floricultura ${cityLabel}`
+                    )}`
+                  )
+                }
+                style={[
+                  styles.cardCtaBtn,
                   {
-                    backgroundColor: colors.surface,
-                    borderColor: colors.border,
-                    padding: 22,
-                    alignItems: 'center',
+                    backgroundColor: profile.darkMode
+                      ? colors.mossPrimary
+                      : colors.mossDeep,
+                    width: '100%',
                   },
                 ]}
               >
-                <Ionicons
-                  name="map-outline"
-                  size={28}
-                  color={colors.mossPrimary}
-                />
-                <Text
-                  style={[
-                    styles.emptyText,
-                    { color: colors.textSecondary, marginVertical: 10 },
-                  ]}
-                >
-                  {t.mapEmptyNote}
-                </Text>
-                <TouchableOpacity
-                  onPress={() =>
-                    Linking.openURL(
-                      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-                        `garden center floricultura ${cityLabel}`
-                      )}`
-                    )
-                  }
-                  style={[
-                    styles.cardCtaBtn,
-                    {
-                      backgroundColor: profile.darkMode
-                        ? colors.mossPrimary
-                        : colors.mossDeep,
-                      width: '100%',
-                    },
-                  ]}
-                >
-                  <Text style={styles.cardCtaText}>{t.mapModalRouteBtn}</Text>
-                </TouchableOpacity>
-              </View>
-            )
+                <Text style={styles.cardCtaText}>{t.mapModalRouteBtn}</Text>
+              </TouchableOpacity>
+            </View>
           }
           renderItem={({ item }) => (
             <View
@@ -397,7 +619,11 @@ export const GardenMapScreen: React.FC = () => {
                 },
               ]}
             >
-              <View style={styles.photoBox}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => openRoute(item)}
+                style={styles.photoBox}
+              >
                 <Image
                   source={{ uri: item.photoUrl }}
                   style={styles.cardPhoto}
@@ -413,7 +639,16 @@ export const GardenMapScreen: React.FC = () => {
                     {item.distanceKm.toFixed(1).replace('.', ',')} km
                   </Text>
                 </View>
-              </View>
+
+                {item.rating && (
+                  <View style={styles.ratingBadge}>
+                    <Ionicons name="star" size={12} color="#C78A28" />
+                    <Text style={styles.distanceText}>
+                      {item.rating.toFixed(1)}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
 
               <View style={styles.cardContent}>
                 <Text style={[styles.placeName, { color: colors.textPrimary }]}>
@@ -428,19 +663,22 @@ export const GardenMapScreen: React.FC = () => {
                   {item.tagline}
                 </Text>
 
-                <View style={styles.addressRow}>
+                <TouchableOpacity
+                  onPress={() => openRoute(item)}
+                  style={styles.addressRow}
+                >
                   <Ionicons
-                    name="location-outline"
+                    name="navigate-outline"
                     size={15}
-                    color={colors.mossMuted}
+                    color={colors.mossPrimary}
                   />
                   <Text
                     style={[styles.addressText, { color: colors.textPrimary }]}
-                    numberOfLines={1}
+                    numberOfLines={2}
                   >
-                    {item.neighborhood}
+                    {item.address}
                   </Text>
-                </View>
+                </TouchableOpacity>
 
                 <TouchableOpacity
                   onPress={() => setSelectedPlace(item)}
@@ -462,7 +700,7 @@ export const GardenMapScreen: React.FC = () => {
         />
       )}
 
-      {/* Modal Editorial "Seu próximo passeio verde." Fiel ao Vídeo */}
+      {/* Modal Editorial "Seu próximo passeio verde." com rota real */}
       <Modal visible={Boolean(selectedPlace)} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View
@@ -472,7 +710,7 @@ export const GardenMapScreen: React.FC = () => {
             ]}
           >
             <Text style={[styles.modalEyebrow, { color: colors.mossMuted }]}>
-              {selectedPlace?.name.toUpperCase()} / GARDEN CENTER
+              {selectedPlace?.name.toUpperCase()}
             </Text>
             <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
               {t.mapModalTitle}
@@ -490,7 +728,7 @@ export const GardenMapScreen: React.FC = () => {
               <Text
                 style={[styles.modalAddrTitle, { color: colors.textPrimary }]}
               >
-                {selectedPlace?.neighborhood}
+                {selectedPlace?.address}
               </Text>
               <Text
                 style={[styles.modalAddrSub, { color: colors.textSecondary }]}
@@ -604,11 +842,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 32,
   },
+  listHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: '800',
     letterSpacing: -0.3,
-    marginBottom: 14,
+  },
+  countText: {
+    fontSize: 12.5,
+    fontWeight: '600',
   },
   editorialCard: {
     borderRadius: 22,
@@ -617,8 +864,9 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   photoBox: {
-    height: 190,
+    height: 185,
     position: 'relative',
+    backgroundColor: '#E5DFD2',
   },
   cardPhoto: {
     width: '100%',
@@ -636,6 +884,18 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 14,
   },
+  ratingBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 14,
+  },
   distanceText: {
     fontSize: 12,
     fontWeight: '700',
@@ -645,14 +905,14 @@ const styles = StyleSheet.create({
     padding: 18,
   },
   placeName: {
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: '800',
     letterSpacing: -0.3,
     marginBottom: 4,
   },
   placeTagline: {
     fontSize: 13.5,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   addressRow: {
     flexDirection: 'row',
@@ -693,6 +953,7 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 13.5,
     textAlign: 'center',
+    lineHeight: 20,
   },
   modalBackdrop: {
     flex: 1,
@@ -730,12 +991,12 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   modalAddrTitle: {
-    fontSize: 14.5,
+    fontSize: 14,
     fontWeight: '700',
   },
   modalAddrSub: {
     fontSize: 12.5,
-    marginTop: 3,
+    marginTop: 4,
   },
   modalPrimaryBtn: {
     paddingVertical: 14,

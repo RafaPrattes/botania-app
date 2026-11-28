@@ -4,7 +4,11 @@ import { AppLanguage } from '../theme/theme';
 
 const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY?.trim();
 const TEXT_MODEL_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-const IMAGE_MODEL_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent?key=${GEMINI_API_KEY}`;
+
+const IMAGE_MODELS = [
+  'gemini-2.5-flash-image',
+  'gemini-3.1-flash-image',
+];
 
 function cleanMarkdown(text: string): string {
   return text
@@ -86,19 +90,18 @@ export async function analyzePlantWithGemini(
     const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!raw) {
-      return language === 'en'
-        ? 'Could not generate a response right now. Please try again in a moment.'
-        : language === 'es'
-        ? 'No pude generar una respuesta ahora. Inténtalo de nuevo en unos segundos.'
-        : 'Não consegui gerar uma resposta agora. Tente enviar a pergunta novamente em alguns segundos.';
+      const apiErr = data?.error?.message;
+      return apiErr
+        ? `Erro da API Gemini: ${apiErr}`
+        : language === 'en'
+        ? 'Could not generate a response right now. Please try again.'
+        : 'Não consegui gerar uma resposta agora. Tente novamente em alguns segundos.';
     }
 
     return cleanMarkdown(raw);
   } catch {
     return language === 'en'
       ? 'Unable to reach the botanical assistant right now. Check your internet connection.'
-      : language === 'es'
-      ? 'Sin conexión con la consultoría botánica en este momento.'
       : 'Sem conexão com a consultoria botânica no momento. Verifique sua internet e tente novamente.';
   }
 }
@@ -182,57 +185,86 @@ export async function identifyPlantFromPhoto(
   }
 }
 
+export type ArtGenResult =
+  | { ok: true; uri: string }
+  | { ok: false; error: string };
+
 /**
- * Gera uma ilustração completa estilo Studio Ghibli em aquarela para a espécie exata
- * e salva permanentemente em disco (FileSystem.documentDirectory) para nunca regenerar.
+ * Gera a ilustração Ghibli da espécie com diagnóstico real de erro e cache em disco.
  */
-export async function generateGhibliPlantArt(
+export async function generateGhibliPlantArtDetailed(
   speciesName: string
-): Promise<string | null> {
-  if (!GEMINI_API_KEY) return null;
+): Promise<ArtGenResult> {
+  if (!GEMINI_API_KEY) {
+    return {
+      ok: false,
+      error:
+        'Variável EXPO_PUBLIC_GEMINI_API_KEY não carregada. Confira o arquivo .env na raiz e reinicie com "npx expo start -c".',
+    };
+  }
 
   const slug = normalizeSpeciesKey(speciesName) || 'plant';
   const dirUri = `${FileSystem.documentDirectory}botania-art/`;
   const fileUri = `${dirUri}${slug}.png`;
 
   try {
-    // 1. Se já existe no disco do celular, devolve imediatamente sem gastar API!
     const existing = await FileSystem.getInfoAsync(fileUri);
     if (existing.exists) {
-      return fileUri;
+      return { ok: true, uri: fileUri };
     }
 
-    const prompt = `Hand-painted Studio Ghibli watercolor and gouache illustration of a single lush "${speciesName}" houseplant in an artisanal terracotta pot, centered cleanly on a warm stone windowsill in front of a cozy arched wooden greenhouse window. Soft morning sunlight rays, gentle bokeh garden foliage outside, clean uncluttered composition with NO extra pots on the sill, NO text, NO watermark, NO human hands. Warm sage green, cream linen, and terracotta color palette, storybook cozy game aesthetic.`;
+    const prompt = `Generate a hand-painted Studio Ghibli watercolor and gouache illustration of a single lush "${speciesName}" houseplant in a rustic terracotta pot, centered cleanly on a warm stone windowsill in front of a cozy arched wooden greenhouse window. Soft morning sunlight rays, gentle bokeh foliage outside, uncluttered composition, no extra pots on the sill, no text, no human hands.`;
 
-    const response = await fetch(IMAGE_MODEL_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseModalities: ['IMAGE'],
-          imageConfig: {
-            aspectRatio: '3:4',
+    let lastError = 'A API não retornou imagem.';
+
+    for (const model of IMAGE_MODELS) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
           },
-        },
-      }),
-    });
+        }),
+      });
 
-    const data = await response.json();
-    const parts: any[] = data?.candidates?.[0]?.content?.parts ?? [];
-    const imagePart = parts.find((p) => p?.inlineData?.data);
+      const data = await response.json();
 
-    if (!imagePart?.inlineData?.data) {
-      return null;
+      if (!response.ok) {
+        const msg = data?.error?.message || `HTTP ${response.status}`;
+        lastError = `[${model}] ${msg}`;
+        // Se for erro 429 (limite de cota) ou 404, tenta o próximo modelo
+        continue;
+      }
+
+      const parts: any[] = data?.candidates?.[0]?.content?.parts ?? [];
+      const imagePart = parts.find((p) => p?.inlineData?.data);
+
+      if (imagePart?.inlineData?.data) {
+        await FileSystem.makeDirectoryAsync(dirUri, { intermediates: true });
+        await FileSystem.writeAsStringAsync(fileUri, imagePart.inlineData.data, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        return { ok: true, uri: fileUri };
+      }
     }
 
-    await FileSystem.makeDirectoryAsync(dirUri, { intermediates: true });
-    await FileSystem.writeAsStringAsync(fileUri, imagePart.inlineData.data, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-
-    return fileUri;
-  } catch {
-    return null;
+    return { ok: false, error: lastError };
+  } catch (err: any) {
+    return {
+      ok: false,
+      error: err?.message || 'Erro de conexão ao gerar imagem.',
+    };
   }
+}
+
+// Mantém compatibilidade com OnboardingScreen.tsx
+export async function generateGhibliPlantArt(
+  speciesName: string
+): Promise<string | null> {
+  const res = await generateGhibliPlantArtDetailed(speciesName);
+  return res.ok ? res.uri : null;
 }

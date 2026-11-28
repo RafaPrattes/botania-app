@@ -1,62 +1,61 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import * as Location from 'expo-location';
 
-export type WeatherCondition = 'clear' | 'cloudy' | 'rain';
+export type WeatherMood = 'sunny' | 'rain' | 'night';
 
 export function useWeatherSync() {
-  const [weather, setWeather] = useState<WeatherCondition>('clear');
+  const [liveMood, setLiveMood] = useState<WeatherMood>(() => {
+    const h = new Date().getHours();
+    return h >= 18 || h < 6 ? 'night' : 'sunny';
+  });
   const [temperature, setTemperature] = useState<number | null>(null);
-  const [weatherLabel, setWeatherLabel] = useState<string>('Ensolarado');
 
   useEffect(() => {
-    let mounted = true;
+    let active = true;
 
-    async function fetchLocalWeather() {
+    const loadWeather = async () => {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
 
-        const pos = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Low,
         });
+        const { latitude, longitude } = loc.coords;
 
-        const { latitude, longitude } = pos.coords;
-        const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`;
-        const res = await fetch(url);
-        if (!res.ok) return;
-
+        const res = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,is_day,weather_code`
+        );
         const data = await res.json();
-        const code: number = data?.current_weather?.weathercode ?? 0;
-        const temp: number | undefined = data?.current_weather?.temperature;
+        if (!active || !data?.current) return;
 
-        if (!mounted) return;
-        if (typeof temp === 'number') setTemperature(Math.round(temp));
+        const temp = Math.round(data.current.temperature_2m);
+        const isDay = data.current.is_day === 1;
+        const code = Number(data.current.weather_code ?? 0);
 
-        // Códigos WMO: 51-67 (chuvisco/chuva), 80-82 (pancadas), 95-99 (trovoada)
-        if (
-          (code >= 51 && code <= 67) ||
-          (code >= 80 && code <= 82) ||
-          code >= 95
-        ) {
-          setWeather('rain');
-          setWeatherLabel('Chuvoso');
-        } else if (code >= 1 && code <= 48) {
-          setWeather('cloudy');
-          setWeatherLabel('Nublado');
+        setTemperature(temp);
+
+        // Códigos WMO de chuva / garoa / tempestade: 51–67 e 80–99
+        const isRaining = (code >= 51 && code <= 67) || code >= 80;
+        if (isRaining) {
+          setLiveMood('rain');
+        } else if (!isDay) {
+          setLiveMood('night');
         } else {
-          setWeather('clear');
-          setWeatherLabel('Céu Limpo');
+          setLiveMood('sunny');
         }
       } catch {
-        // Mantém céu limpo caso offline
+        // Mantém fallback baseado no relógio do aparelho
       }
-    }
+    };
 
-    fetchLocalWeather();
+    loadWeather();
     return () => {
-      mounted = false;
+      active = false;
     };
   }, []);
 
-  return { weather, temperature, weatherLabel };
+  return { liveMood, temperature };
 }
+
+

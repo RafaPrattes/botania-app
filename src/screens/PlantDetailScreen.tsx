@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,16 +8,18 @@ import {
   ActivityIndicator,
   Modal,
   ImageBackground,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 import { PlantIllustration } from '../components/PlantIllustration';
 import {
-  generateGhibliPlantArt,
+  generateGhibliPlantArtDetailed,
   normalizeSpeciesKey,
 } from '../services/geminiService';
 import { PlantArchetype } from '../services/plantSpeciesService';
+import { useWeatherSync, WeatherMood } from '../hooks/useWeatherSync';
 import { AppLanguage, PALETTES, TRANSLATIONS } from '../theme/theme';
 import {
   formatRelativeDate,
@@ -31,6 +33,30 @@ interface PlantDetailScreenProps {
   onBack: () => void;
   onSelectPlant: (id: string) => void;
 }
+
+const RAIN_STREAKS = [
+  { left: '12%', delay: 0 },
+  { left: '26%', delay: 180 },
+  { left: '41%', delay: 90 },
+  { left: '56%', delay: 260 },
+  { left: '70%', delay: 140 },
+  { left: '84%', delay: 310 },
+];
+
+const WATER_DROPS = [
+  { left: '34%', delay: 0 },
+  { left: '44%', delay: 120 },
+  { left: '50%', delay: 60 },
+  { left: '58%', delay: 180 },
+  { left: '66%', delay: 90 },
+];
+
+const FIREFLIES = [
+  { left: '22%', top: '28%' },
+  { left: '74%', top: '22%' },
+  { left: '62%', top: '54%' },
+  { left: '30%', top: '62%' },
+];
 
 function getLightLabel(category: PlantArchetype, lang: AppLanguage): string {
   const map: Record<PlantArchetype, Record<AppLanguage, string>> = {
@@ -55,6 +81,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const speciesArtCache = usePlantStore((s) => s.speciesArtCache);
   const setSpeciesArt = usePlantStore((s) => s.setSpeciesArt);
 
+  const { liveMood, temperature } = useWeatherSync();
+  const [moodOverride, setMoodOverride] = useState<WeatherMood | null>(null);
+  const activeMood: WeatherMood = moodOverride ?? liveMood;
+
+  const [isWatering, setIsWatering] = useState(false);
   const [generatingArt, setGeneratingArt] = useState(false);
   const [careModalVisible, setCareModalVisible] = useState(false);
   const [artFeedback, setArtFeedback] = useState<{
@@ -64,8 +95,51 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
     tone: 'default' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', tone: 'default' });
 
+  // Animações nativas na GPU (60fps, ZERO SVG)
+  const rainAnim = useRef(new Animated.Value(0)).current;
+  const fireflyAnim = useRef(new Animated.Value(0)).current;
+  const waterDropAnim = useRef(new Animated.Value(0)).current;
+  const plantBounce = useRef(new Animated.Value(1)).current;
+  const xpFloatAnim = useRef(new Animated.Value(0)).current;
+
   const colors = profile.darkMode ? PALETTES.dark : PALETTES.light;
   const t = TRANSLATIONS[profile.language];
+
+  // Loop suave de chuva na janela
+  useEffect(() => {
+    if (activeMood !== 'rain') return;
+    rainAnim.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(rainAnim, {
+        toValue: 1,
+        duration: 950,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [activeMood, rainAnim]);
+
+  // Loop suave de vagalumes / estrelas à noite
+  useEffect(() => {
+    if (activeMood !== 'night') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(fireflyAnim, {
+          toValue: 1,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(fireflyAnim, {
+          toValue: 0,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [activeMood, fireflyAnim]);
 
   const currentIndex = plants.findIndex((p) => p.id === plantId);
   const plant = plants[currentIndex];
@@ -84,20 +158,65 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const nextPlant =
     plants.length > 1 ? plants[(currentIndex + 1) % plants.length] : null;
 
+  // Alterna o clima da janela ao tocar (útil para testar e demonstrar ao vivo!)
+  const cycleWeatherMood = () => {
+    const order: WeatherMood[] = ['sunny', 'rain', 'night'];
+    const nextIdx = (order.indexOf(activeMood) + 1) % order.length;
+    setMoodOverride(order[nextIdx]);
+  };
+
   const handleWater = () => {
-    if (isHydrated) return;
-    waterPlant(plant.id);
-    setCareModalVisible(true);
+    if (isHydrated || isWatering) return;
+    setIsWatering(true);
+    waterDropAnim.setValue(0);
+    xpFloatAnim.setValue(0);
+
+    // 1. Gotinhas d'água caindo sobre a planta
+    Animated.timing(waterDropAnim, {
+      toValue: 1,
+      duration: 1050,
+      useNativeDriver: true,
+    }).start();
+
+    // 2. Pulinho elástico alegre da planta + "+20 XP" subindo
+    Animated.sequence([
+      Animated.delay(300),
+      Animated.parallel([
+        Animated.sequence([
+          Animated.spring(plantBounce, {
+            toValue: 1.09,
+            friction: 4,
+            useNativeDriver: true,
+          }),
+          Animated.spring(plantBounce, {
+            toValue: 1,
+            friction: 5,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.timing(xpFloatAnim, {
+          toValue: 1,
+          duration: 950,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start(() => {
+      waterPlant(plant.id);
+      setIsWatering(false);
+      setCareModalVisible(true);
+    });
   };
 
   const handleGenerateArt = async () => {
     if (generatingArt) return;
     setGeneratingArt(true);
-    const uri = await generateGhibliPlantArt(plant.species || plant.name);
+    const res = await generateGhibliPlantArtDetailed(
+      plant.species || plant.name
+    );
     setGeneratingArt(false);
 
-    if (uri) {
-      setSpeciesArt(plant.species || plant.name, uri);
+    if (res.ok) {
+      setSpeciesArt(plant.species || plant.name, res.uri);
       setArtFeedback({
         visible: true,
         title: t.artGeneratedTitle,
@@ -108,15 +227,32 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
       setArtFeedback({
         visible: true,
         title: t.artErrorTitle,
-        message: t.artErrorMsg,
+        message: res.error,
         tone: 'danger',
       });
     }
   };
 
+  const moodMeta = {
+    sunny: {
+      icon: 'sunny-outline' as const,
+      label: temperature !== null ? `${temperature}°C` : 'Sol',
+      veil: 'rgba(255, 241, 204, 0.14)',
+    },
+    rain: {
+      icon: 'rainy-outline' as const,
+      label: temperature !== null ? `${temperature}°C` : 'Chuva',
+      veil: 'rgba(28, 48, 60, 0.34)',
+    },
+    night: {
+      icon: 'moon-outline' as const,
+      label: temperature !== null ? `${temperature}°C` : 'Noite',
+      veil: 'rgba(13, 24, 38, 0.56)',
+    },
+  }[activeMood];
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Top Bar Fiel ao Figma */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
@@ -150,40 +286,158 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        {/* Palco Editorial Arredondado da Planta */}
+        {/* Palco Interativo de Jogo Ghibli (Clima ao vivo + Animação de Rega, ZERO SVG) */}
         <View
           style={[
             styles.artworkCard,
             { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
           ]}
         >
-          {resolvedArt ? (
-            <PlantIllustration
-              category={plant.category}
-              species={plant.species}
-              generatedArtUri={resolvedArt}
-              isLowHp={isLowHp}
-              size="large"
-            />
-          ) : (
-            <ImageBackground
-              source={require('../../assets/ghibli/greenhouse_bg.png')}
-              style={styles.artworkBackdrop}
-              blurRadius={6}
-              resizeMode="cover"
-            >
-              <View style={styles.artworkVeil}>
-                <PlantIllustration
-                  category={plant.category}
-                  species={plant.species}
-                  isLowHp={isLowHp}
-                  size="large"
-                />
-              </View>
-            </ImageBackground>
+          <Animated.View
+            style={[
+              styles.sceneFull,
+              { transform: [{ scale: plantBounce }] },
+            ]}
+          >
+            {resolvedArt ? (
+              <PlantIllustration
+                category={plant.category}
+                species={plant.species}
+                generatedArtUri={resolvedArt}
+                isLowHp={isLowHp}
+                size="large"
+              />
+            ) : (
+              <ImageBackground
+                source={require('../../assets/ghibli/greenhouse_bg.png')}
+                style={styles.artworkBackdrop}
+                blurRadius={4}
+                resizeMode="cover"
+              >
+                <View style={styles.artworkVeil}>
+                  <PlantIllustration
+                    category={plant.category}
+                    species={plant.species}
+                    isLowHp={isLowHp}
+                    size="large"
+                  />
+                </View>
+              </ImageBackground>
+            )}
+          </Animated.View>
+
+          {/* Camada Atmosférica de Iluminação (Sol / Chuva / Noite) */}
+          <View
+            pointerEvents="none"
+            style={[styles.moodOverlay, { backgroundColor: moodMeta.veil }]}
+          />
+
+          {/* Partículas de Chuva Real na Janela (Zero SVG) */}
+          {activeMood === 'rain' && (
+            <View pointerEvents="none" style={styles.particlesLayer}>
+              {RAIN_STREAKS.map((drop, i) => {
+                const translateY = rainAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-40 - i * 15, 320],
+                });
+                return (
+                  <Animated.View
+                    key={`rain-${i}`}
+                    style={[
+                      styles.rainDrop,
+                      {
+                        left: drop.left as any,
+                        transform: [{ translateY }, { rotate: '12deg' }],
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </View>
           )}
 
-          {/* Badge Flutuante "% saudável" */}
+          {/* Vagalumes / Brilho Noturno Ghibli (Zero SVG) */}
+          {activeMood === 'night' && (
+            <View pointerEvents="none" style={styles.particlesLayer}>
+              {FIREFLIES.map((fly, i) => {
+                const opacity = fireflyAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: i % 2 === 0 ? [0.2, 0.95] : [0.9, 0.25],
+                });
+                const translateY = fireflyAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, i % 2 === 0 ? -10 : 10],
+                });
+                return (
+                  <Animated.View
+                    key={`fly-${i}`}
+                    style={[
+                      styles.firefly,
+                      {
+                        left: fly.left as any,
+                        top: fly.top as any,
+                        opacity,
+                        transform: [{ translateY }],
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </View>
+          )}
+
+          {/* Animação Interativa de Rega: Gotas + "+20 XP" Flutuante */}
+          {isWatering && (
+            <View pointerEvents="none" style={styles.particlesLayer}>
+              {WATER_DROPS.map((drop, idx) => {
+                const translateY = waterDropAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [24 + idx * 8, 220],
+                });
+                const opacity = waterDropAnim.interpolate({
+                  inputRange: [0, 0.2, 0.85, 1],
+                  outputRange: [0, 1, 1, 0],
+                });
+                return (
+                  <Animated.View
+                    key={`wdrop-${idx}`}
+                    style={[
+                      styles.waterDroplet,
+                      {
+                        left: drop.left as any,
+                        opacity,
+                        transform: [{ translateY }],
+                      },
+                    ]}
+                  />
+                );
+              })}
+
+              <Animated.View
+                style={[
+                  styles.floatingXpBadge,
+                  {
+                    opacity: xpFloatAnim.interpolate({
+                      inputRange: [0, 0.2, 0.8, 1],
+                      outputRange: [0, 1, 1, 0],
+                    }),
+                    transform: [
+                      {
+                        translateY: xpFloatAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [20, -45],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <Text style={styles.floatingXpText}>+20 XP</Text>
+              </Animated.View>
+            </View>
+          )}
+
+          {/* Badge Esquerdo: "% saudável" */}
           <View style={styles.healthPill}>
             <Ionicons
               name="leaf-outline"
@@ -196,11 +450,21 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
                 { color: isLowHp ? '#A95138' : '#1F3A2E' },
               ]}
             >
-              {plant.hp}% {isLowHp ? t.drySoil.toLowerCase() : t.healthy.toLowerCase()}
+              {plant.hp}%{' '}
+              {isLowHp ? t.drySoil.toLowerCase() : t.healthy.toLowerCase()}
             </Text>
           </View>
 
-          {/* Setas Laterais para Navegar entre Plantas */}
+          {/* Badge Direito Interativo: Clima da Janela (toque para alternar Sol / Chuva / Noite) */}
+          <TouchableOpacity
+            onPress={cycleWeatherMood}
+            activeOpacity={0.85}
+            style={styles.weatherPill}
+          >
+            <Ionicons name={moodMeta.icon} size={14} color="#1F3A2E" />
+            <Text style={styles.weatherPillText}>{moodMeta.label}</Text>
+          </TouchableOpacity>
+
           {prevPlant && (
             <TouchableOpacity
               onPress={() => onSelectPlant(prevPlant.id)}
@@ -219,7 +483,6 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           )}
         </View>
 
-        {/* Título e Espécie */}
         <Text style={[styles.plantTitle, { color: colors.textPrimary }]}>
           {plant.name}
         </Text>
@@ -227,7 +490,7 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           {plant.species} · {plant.location}
         </Text>
 
-        {/* 3 Cards de Métricas Fiel ao Figma (ÁGUA / LUZ / SAÚDE) */}
+        {/* 3 Cards de Métricas */}
         <View style={styles.metricsRow}>
           <View
             style={[
@@ -304,7 +567,6 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           </View>
         </View>
 
-        {/* Bloco "Seu próximo cuidado" */}
         <Text style={[styles.sectionHeading, { color: colors.textPrimary }]}>
           {t.nextCareTitle}
         </Text>
@@ -329,10 +591,9 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
           </Text>
         </View>
 
-        {/* Botão Principal Escuro */}
         <TouchableOpacity
           onPress={handleWater}
-          disabled={isHydrated}
+          disabled={isHydrated || isWatering}
           activeOpacity={0.85}
           style={[
             styles.ctaBtn,
@@ -351,7 +612,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
               { color: isHydrated ? colors.textSecondary : '#FFFFFF' },
             ]}
           >
-            {isHydrated ? t.hydrated : `${t.waterNow} · +20 XP`}
+            {isHydrated
+              ? t.hydrated
+              : isWatering
+              ? t.watering
+              : `${t.waterNow} · +20 XP`}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -429,32 +694,69 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingBottom: 34,
-  },
+  headerTitle: { fontSize: 17, fontWeight: '700' },
+  content: { paddingHorizontal: 20, paddingBottom: 34 },
   artworkCard: {
-    height: 296,
+    height: 310,
     borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
     marginBottom: 18,
     position: 'relative',
   },
-  artworkBackdrop: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
-  },
+  sceneFull: { flex: 1, width: '100%', height: '100%' },
+  artworkBackdrop: { flex: 1, width: '100%', height: '100%' },
   artworkVeil: {
     flex: 1,
-    backgroundColor: 'rgba(246, 243, 236, 0.25)',
+    backgroundColor: 'rgba(246, 243, 236, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  moodOverlay: {
+    ...StyleSheet.absoluteFill,
+  },
+  particlesLayer: {
+    ...StyleSheet.absoluteFill,
+    overflow: 'hidden',
+  },
+  rainDrop: {
+    position: 'absolute',
+    width: 2.5,
+    height: 26,
+    borderRadius: 2,
+    backgroundColor: 'rgba(218, 238, 250, 0.72)',
+  },
+  firefly: {
+    position: 'absolute',
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#FFF3B0',
+    shadowColor: '#FFE57F',
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  waterDroplet: {
+    position: 'absolute',
+    width: 9,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(125, 206, 240, 0.92)',
+  },
+  floatingXpBadge: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '36%',
+    backgroundColor: '#1F3A2E',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  floatingXpText: {
+    color: '#F5E6B8',
+    fontSize: 15,
+    fontWeight: '800',
   },
   healthPill: {
     position: 'absolute',
@@ -468,9 +770,23 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 16,
   },
-  healthPillText: {
+  healthPillText: { fontSize: 12, fontWeight: '700' },
+  weatherPill: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  weatherPillText: {
     fontSize: 12,
     fontWeight: '700',
+    color: '#1F3A2E',
   },
   sideArrow: {
     position: 'absolute',
@@ -484,21 +800,9 @@ const styles = StyleSheet.create({
   },
   sideLeft: { left: 12 },
   sideRight: { right: 12 },
-  plantTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    letterSpacing: -0.4,
-  },
-  plantSub: {
-    fontSize: 13.5,
-    marginTop: 4,
-    marginBottom: 18,
-  },
-  metricsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 22,
-  },
+  plantTitle: { fontSize: 26, fontWeight: '800', letterSpacing: -0.4 },
+  plantSub: { fontSize: 13.5, marginTop: 4, marginBottom: 18 },
+  metricsRow: { flexDirection: 'row', gap: 10, marginBottom: 22 },
   metricCard: {
     flex: 1,
     borderRadius: 16,
@@ -511,43 +815,23 @@ const styles = StyleSheet.create({
     gap: 5,
     marginBottom: 8,
   },
-  metricLabel: {
-    fontSize: 10.5,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-  },
-  metricValue: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  sectionHeading: {
-    fontSize: 17,
-    fontWeight: '800',
-    marginBottom: 10,
-  },
+  metricLabel: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.6 },
+  metricValue: { fontSize: 15, fontWeight: '800' },
+  sectionHeading: { fontSize: 17, fontWeight: '800', marginBottom: 10 },
   nextCareCard: {
     borderRadius: 18,
     borderWidth: 1,
     padding: 16,
     marginBottom: 18,
   },
-  nextCareMain: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  nextCareSub: {
-    fontSize: 12.5,
-    marginTop: 4,
-  },
+  nextCareMain: { fontSize: 15, fontWeight: '700' },
+  nextCareSub: { fontSize: 12.5, marginTop: 4 },
   ctaBtn: {
     paddingVertical: 16,
     borderRadius: 16,
     alignItems: 'center',
   },
-  ctaText: {
-    fontSize: 15.5,
-    fontWeight: '700',
-  },
+  ctaText: { fontSize: 15.5, fontWeight: '700' },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(18, 28, 22, 0.52)',
@@ -588,9 +872,5 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
   },
-  modalCtaText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  modalCtaText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
 });

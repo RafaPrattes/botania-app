@@ -14,7 +14,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
 
 export const LoginScreen: React.FC = () => {
-  const loginOrRegister = usePlantStore((s) => s.loginOrRegister);
+  const loginOrRegister = usePlantStore((s) =>
+    (s as unknown as {
+      loginOrRegister: (
+        mode: 'login' | 'register',
+        name: string,
+        email: string,
+        password: string,
+      ) => Promise<{ ok: boolean; error?: string }>;
+    }).loginOrRegister,
+  );
 
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [name, setName] = useState('');
