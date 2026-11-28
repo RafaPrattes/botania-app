@@ -95,7 +95,7 @@ export default function App() {
                 size={22}
                 color={
                   currentView === 'home'
-                    ? colors.mossPrimary
+                    ? colors.textPrimary
                     : colors.textSecondary
                 }
               />
@@ -105,8 +105,9 @@ export default function App() {
                   {
                     color:
                       currentView === 'home'
-                        ? colors.mossPrimary
+                        ? colors.textPrimary
                         : colors.textSecondary,
+                    fontWeight: currentView === 'home' ? '700' : '500',
                   },
                 ]}
               >
@@ -123,7 +124,7 @@ export default function App() {
                 size={22}
                 color={
                   currentView === 'ai'
-                    ? colors.mossPrimary
+                    ? colors.textPrimary
                     : colors.textSecondary
                 }
               />
@@ -133,8 +134,9 @@ export default function App() {
                   {
                     color:
                       currentView === 'ai'
-                        ? colors.mossPrimary
+                        ? colors.textPrimary
                         : colors.textSecondary,
+                    fontWeight: currentView === 'ai' ? '700' : '500',
                   },
                 ]}
               >
@@ -147,11 +149,13 @@ export default function App() {
               onPress={() => setCurrentView('maps')}
             >
               <Ionicons
-                name={currentView === 'maps' ? 'map' : 'map-outline'}
+                name={
+                  currentView === 'maps' ? 'location' : 'location-outline'
+                }
                 size={22}
                 color={
                   currentView === 'maps'
-                    ? colors.mossPrimary
+                    ? colors.textPrimary
                     : colors.textSecondary
                 }
               />
@@ -161,8 +165,9 @@ export default function App() {
                   {
                     color:
                       currentView === 'maps'
-                        ? colors.mossPrimary
+                        ? colors.textPrimary
                         : colors.textSecondary,
+                    fontWeight: currentView === 'maps' ? '700' : '500',
                   },
                 ]}
               >
@@ -188,7 +193,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderTopWidth: 1,
     paddingTop: 10,
-    paddingBottom: 22,
+    paddingBottom: 24,
     paddingHorizontal: 12,
   },
   tabItem: {
@@ -198,7 +203,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   tabLabel: {
-    fontSize: 11,
-    fontWeight: '700',
+    fontSize: 11.5,
   },
 });

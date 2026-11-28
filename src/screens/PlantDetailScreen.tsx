@@ -3,25 +3,26 @@ import {
   View,
   Text,
   TouchableOpacity,
+  ScrollView,
   StyleSheet,
-  ImageBackground,
   ActivityIndicator,
+  Modal,
+  ImageBackground,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlantStore } from '../store/usePlantStore';
-import {
-  PlantIllustration,
-  LOCAL_GHIBLI_ASSETS,
-} from '../components/PlantIllustration';
+import { PlantIllustration } from '../components/PlantIllustration';
 import {
   generateGhibliPlantArt,
   normalizeSpeciesKey,
 } from '../services/geminiService';
-import { PALETTES, TRANSLATIONS } from '../theme/theme';
+import { PlantArchetype } from '../services/plantSpeciesService';
+import { AppLanguage, PALETTES, TRANSLATIONS } from '../theme/theme';
 import {
   formatRelativeDate,
   getNextWateringLabel,
+  getWateringIntervalDays,
 } from '../utils/wateringSchedule';
 import { ThemedModal } from '../components/ThemedModal';
 
@@ -29,6 +30,18 @@ interface PlantDetailScreenProps {
   plantId: string;
   onBack: () => void;
   onSelectPlant: (id: string) => void;
+}
+
+function getLightLabel(category: PlantArchetype, lang: AppLanguage): string {
+  const map: Record<PlantArchetype, Record<AppLanguage, string>> = {
+    cacto: { pt: 'Sol pleno', en: 'Full sun', es: 'Sol directo' },
+    suculenta: { pt: 'Sol suave', en: 'Bright sun', es: 'Sol suave' },
+    pendente: { pt: 'Meia-sombra', en: 'Half shade', es: 'Semisombra' },
+    bonsai: { pt: 'Luz direta', en: 'Direct light', es: 'Luz directa' },
+    flor: { pt: 'Claridade', en: 'Bright light', es: 'Mucha luz' },
+    folhagem: { pt: 'Indireta', en: 'Indirect', es: 'Indirecta' },
+  };
+  return map[category]?.[lang] ?? map.folhagem[lang];
 }
 
 export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
@@ -42,9 +55,9 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const speciesArtCache = usePlantStore((s) => s.speciesArtCache);
   const setSpeciesArt = usePlantStore((s) => s.setSpeciesArt);
 
-  const [isWatering, setIsWatering] = useState(false);
   const [generatingArt, setGeneratingArt] = useState(false);
-  const [modalInfo, setModalInfo] = useState<{
+  const [careModalVisible, setCareModalVisible] = useState(false);
+  const [artFeedback, setArtFeedback] = useState<{
     visible: boolean;
     title: string;
     message: string;
@@ -58,11 +71,11 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
   const plant = plants[currentIndex];
   if (!plant) return null;
 
-  const isLowHp = plant.hp <= 40;
+  const isLowHp = plant.hp <= 45;
+  const isHydrated = plant.hp >= plant.maxHp;
+  const intervalDays = getWateringIntervalDays(plant.category);
   const speciesKey = normalizeSpeciesKey(plant.species || plant.name);
-  const resolvedGeneratedArt =
-    plant.generatedArtUri || speciesArtCache[speciesKey];
-  const hasLocalPng = Boolean(LOCAL_GHIBLI_ASSETS[plant.category]);
+  const resolvedArt = plant.generatedArtUri || speciesArtCache[speciesKey];
 
   const prevPlant =
     plants.length > 1
@@ -72,12 +85,9 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
     plants.length > 1 ? plants[(currentIndex + 1) % plants.length] : null;
 
   const handleWater = () => {
-    if (plant.hp >= plant.maxHp || isWatering) return;
-    setIsWatering(true);
-    setTimeout(() => {
-      waterPlant(plant.id);
-      setIsWatering(false);
-    }, 850);
+    if (isHydrated) return;
+    waterPlant(plant.id);
+    setCareModalVisible(true);
   };
 
   const handleGenerateArt = async () => {
@@ -88,14 +98,14 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
 
     if (uri) {
       setSpeciesArt(plant.species || plant.name, uri);
-      setModalInfo({
+      setArtFeedback({
         visible: true,
         title: t.artGeneratedTitle,
         message: t.artGeneratedMsg,
         tone: 'success',
       });
     } else {
-      setModalInfo({
+      setArtFeedback({
         visible: true,
         title: t.artErrorTitle,
         message: t.artErrorMsg,
@@ -106,212 +116,298 @@ export const PlantDetailScreen: React.FC<PlantDetailScreenProps> = ({
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]}>
+      {/* Top Bar Fiel ao Figma */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
-          style={[styles.roundBtn, { backgroundColor: colors.surface }]}
+          style={[styles.circleBtn, { backgroundColor: colors.surfaceAlt }]}
         >
-          <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
+          <Ionicons name="chevron-back" size={20} color={colors.textPrimary} />
         </TouchableOpacity>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.title, { color: colors.textPrimary }]}>
-            {plant.name}
-          </Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            {plant.location} • {plant.species}
-          </Text>
-        </View>
+
+        <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+          {t.myPlant}
+        </Text>
+
+        <TouchableOpacity
+          onPress={handleGenerateArt}
+          disabled={generatingArt}
+          style={[styles.circleBtn, { backgroundColor: colors.surfaceAlt }]}
+        >
+          {generatingArt ? (
+            <ActivityIndicator size="small" color={colors.mossPrimary} />
+          ) : (
+            <Ionicons
+              name="sparkles-outline"
+              size={18}
+              color={colors.mossPrimary}
+            />
+          )}
+        </TouchableOpacity>
       </View>
 
-      {/* PALCO VISUAL LIMPO:
-          - Se tiver arte completa gerada por IA -> ocupa o palco inteiro sem sobreposição.
-          - Se for PNG recortado ou placeholder -> fundo Ghibli desfocado (depth of field) + apoio limpo. */}
-      <View style={styles.stageContainer}>
-        {resolvedGeneratedArt ? (
-          <PlantIllustration
-            category={plant.category}
-            species={plant.species}
-            generatedArtUri={resolvedGeneratedArt}
-            isLowHp={isLowHp}
-            size="large"
-          />
-        ) : (
-          <ImageBackground
-            source={require('../../assets/ghibli/greenhouse_bg.png')}
-            style={styles.blurredBackdrop}
-            blurRadius={8}
-            resizeMode="cover"
-          >
-            <View
-              style={[
-                styles.softVeil,
-                {
-                  backgroundColor: profile.darkMode
-                    ? 'rgba(18, 30, 24, 0.45)'
-                    : 'rgba(244, 241, 234, 0.32)',
-                },
-              ]}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Palco Editorial Arredondado da Planta */}
+        <View
+          style={[
+            styles.artworkCard,
+            { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
+          ]}
+        >
+          {resolvedArt ? (
+            <PlantIllustration
+              category={plant.category}
+              species={plant.species}
+              generatedArtUri={resolvedArt}
+              isLowHp={isLowHp}
+              size="large"
+            />
+          ) : (
+            <ImageBackground
+              source={require('../../assets/ghibli/greenhouse_bg.png')}
+              style={styles.artworkBackdrop}
+              blurRadius={6}
+              resizeMode="cover"
             >
-              <View style={styles.heroPlantBox}>
+              <View style={styles.artworkVeil}>
                 <PlantIllustration
                   category={plant.category}
                   species={plant.species}
                   isLowHp={isLowHp}
                   size="large"
                 />
-                {hasLocalPng && <View style={styles.groundShadow} />}
               </View>
-              <View style={styles.cleanShelf} />
-            </View>
-          </ImageBackground>
-        )}
+            </ImageBackground>
+          )}
 
-        {/* Setas laterais flutuantes limpas */}
-        {prevPlant && (
-          <TouchableOpacity
-            onPress={() => onSelectPlant(prevPlant.id)}
-            style={[styles.navArrow, styles.navLeft]}
-          >
-            <Ionicons name="chevron-back" size={20} color="#1E352B" />
-          </TouchableOpacity>
-        )}
-        {nextPlant && (
-          <TouchableOpacity
-            onPress={() => onSelectPlant(nextPlant.id)}
-            style={[styles.navArrow, styles.navRight]}
-          >
-            <Ionicons name="chevron-forward" size={20} color="#1E352B" />
-          </TouchableOpacity>
-        )}
-
-        {/* Botão discreto para pintar a cena Ghibli exclusiva desta espécie com IA */}
-        {!resolvedGeneratedArt && (
-          <TouchableOpacity
-            onPress={handleGenerateArt}
-            disabled={generatingArt}
-            style={styles.genArtPill}
-          >
-            {generatingArt ? (
-              <ActivityIndicator size="small" color="#FAF7F0" />
-            ) : (
-              <Ionicons name="sparkles" size={14} color="#FAF7F0" />
-            )}
-            <Text style={styles.genArtText}>
-              {generatingArt ? t.generatingArt : t.generateArt}
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Painel Inferior 100% Traduzido */}
-      <View
-        style={[
-          styles.bottomPanel,
-          { backgroundColor: colors.surface, borderColor: colors.border },
-        ]}
-      >
-        <View style={styles.reminderRow}>
-          <View style={[styles.infoPill, { backgroundColor: colors.surfaceAlt }]}>
+          {/* Badge Flutuante "% saudável" */}
+          <View style={styles.healthPill}>
             <Ionicons
-              name="time-outline"
-              size={15}
-              color={colors.mossPrimary}
+              name="leaf-outline"
+              size={13}
+              color={isLowHp ? '#A95138' : '#1F3A2E'}
             />
-            <Text style={[styles.infoPillText, { color: colors.textPrimary }]}>
-              {t.lastWatered}:{' '}
-              {formatRelativeDate(plant.lastWateredAt, profile.language)}
+            <Text
+              style={[
+                styles.healthPillText,
+                { color: isLowHp ? '#A95138' : '#1F3A2E' },
+              ]}
+            >
+              {plant.hp}% {isLowHp ? t.drySoil.toLowerCase() : t.healthy.toLowerCase()}
             </Text>
           </View>
 
-          <View style={[styles.infoPill, { backgroundColor: colors.surfaceAlt }]}>
-            <Ionicons
-              name="calendar-outline"
-              size={15}
-              color={colors.mossPrimary}
-            />
-            <Text style={[styles.infoPillText, { color: colors.textPrimary }]}>
-              {t.nextWatering}:{' '}
-              {getNextWateringLabel(
-                plant.category,
-                plant.lastWateredAt,
-                profile.language
-              )}
-            </Text>
-          </View>
+          {/* Setas Laterais para Navegar entre Plantas */}
+          {prevPlant && (
+            <TouchableOpacity
+              onPress={() => onSelectPlant(prevPlant.id)}
+              style={[styles.sideArrow, styles.sideLeft]}
+            >
+              <Ionicons name="chevron-back" size={18} color="#1F3A2E" />
+            </TouchableOpacity>
+          )}
+          {nextPlant && (
+            <TouchableOpacity
+              onPress={() => onSelectPlant(nextPlant.id)}
+              style={[styles.sideArrow, styles.sideRight]}
+            >
+              <Ionicons name="chevron-forward" size={18} color="#1F3A2E" />
+            </TouchableOpacity>
+          )}
         </View>
 
-        <View style={styles.hpHeader}>
-          <Text style={[styles.hpStatus, { color: colors.textPrimary }]}>
-            {isLowHp ? t.drySoil : t.balancedMoisture}
-          </Text>
-          <Text
-            style={[
-              styles.hpPercent,
-              { color: isLowHp ? colors.terracotta : colors.mossPrimary },
-            ]}
-          >
-            {plant.hp}%
-          </Text>
-        </View>
+        {/* Título e Espécie */}
+        <Text style={[styles.plantTitle, { color: colors.textPrimary }]}>
+          {plant.name}
+        </Text>
+        <Text style={[styles.plantSub, { color: colors.textSecondary }]}>
+          {plant.species} · {plant.location}
+        </Text>
 
-        <View style={[styles.hpTrack, { backgroundColor: colors.surfaceAlt }]}>
+        {/* 3 Cards de Métricas Fiel ao Figma (ÁGUA / LUZ / SAÚDE) */}
+        <View style={styles.metricsRow}>
           <View
             style={[
-              styles.hpFill,
-              {
-                width: `${plant.hp}%`,
-                backgroundColor: isLowHp
-                  ? colors.terracotta
-                  : colors.mossPrimary,
-              },
+              styles.metricCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
             ]}
-          />
+          >
+            <View style={styles.metricTop}>
+              <Ionicons
+                name="water-outline"
+                size={15}
+                color={colors.mossPrimary}
+              />
+              <Text
+                style={[styles.metricLabel, { color: colors.textSecondary }]}
+              >
+                {t.metricWater}
+              </Text>
+            </View>
+            <Text style={[styles.metricValue, { color: colors.textPrimary }]}>
+              {intervalDays} {t.daysUnit}
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.metricCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.metricTop}>
+              <Ionicons
+                name="sunny-outline"
+                size={15}
+                color={colors.mossPrimary}
+              />
+              <Text
+                style={[styles.metricLabel, { color: colors.textSecondary }]}
+              >
+                {t.metricLight}
+              </Text>
+            </View>
+            <Text style={[styles.metricValue, { color: colors.textPrimary }]}>
+              {getLightLabel(plant.category, profile.language)}
+            </Text>
+          </View>
+
+          <View
+            style={[
+              styles.metricCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.metricTop}>
+              <Ionicons
+                name="leaf-outline"
+                size={15}
+                color={isLowHp ? colors.terracotta : colors.mossPrimary}
+              />
+              <Text
+                style={[styles.metricLabel, { color: colors.textSecondary }]}
+              >
+                {t.metricHealth}
+              </Text>
+            </View>
+            <Text
+              style={[
+                styles.metricValue,
+                { color: isLowHp ? colors.terracotta : colors.textPrimary },
+              ]}
+            >
+              {plant.hp}% HP
+            </Text>
+          </View>
         </View>
 
+        {/* Bloco "Seu próximo cuidado" */}
+        <Text style={[styles.sectionHeading, { color: colors.textPrimary }]}>
+          {t.nextCareTitle}
+        </Text>
+
+        <View
+          style={[
+            styles.nextCareCard,
+            { backgroundColor: colors.surfaceAlt, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.nextCareMain, { color: colors.textPrimary }]}>
+            {t.nextWatering}:{' '}
+            {getNextWateringLabel(
+              plant.category,
+              plant.lastWateredAt,
+              profile.language
+            )}
+          </Text>
+          <Text style={[styles.nextCareSub, { color: colors.textSecondary }]}>
+            {t.lastWatered}:{' '}
+            {formatRelativeDate(plant.lastWateredAt, profile.language)}
+          </Text>
+        </View>
+
+        {/* Botão Principal Escuro */}
         <TouchableOpacity
           onPress={handleWater}
-          disabled={plant.hp >= plant.maxHp || isWatering}
+          disabled={isHydrated}
+          activeOpacity={0.85}
           style={[
-            styles.waterBtn,
+            styles.ctaBtn,
             {
-              backgroundColor:
-                plant.hp >= plant.maxHp
-                  ? colors.surfaceAlt
-                  : colors.mossPrimary,
+              backgroundColor: isHydrated
+                ? colors.surfaceAlt
+                : profile.darkMode
+                ? colors.mossPrimary
+                : colors.mossDeep,
             },
           ]}
         >
-          <Ionicons
-            name="water-outline"
-            size={20}
-            color={plant.hp >= plant.maxHp ? colors.textSecondary : '#FFFFFF'}
-          />
           <Text
             style={[
-              styles.waterBtnText,
-              {
-                color:
-                  plant.hp >= plant.maxHp ? colors.textSecondary : '#FFFFFF',
-              },
+              styles.ctaText,
+              { color: isHydrated ? colors.textSecondary : '#FFFFFF' },
             ]}
           >
-            {plant.hp >= plant.maxHp
-              ? t.hydrated
-              : isWatering
-              ? t.watering
-              : `${t.waterNow} (+10 XP)`}
+            {isHydrated ? t.hydrated : `${t.waterNow} · +20 XP`}
           </Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
+
+      {/* Modal "Cuidado registrado." */}
+      <Modal visible={careModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View
+            style={[
+              styles.careModalCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View
+              style={[
+                styles.dropCircle,
+                { backgroundColor: colors.surfaceAlt },
+              ]}
+            >
+              <Ionicons
+                name="water-outline"
+                size={24}
+                color={colors.mossPrimary}
+              />
+            </View>
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>
+              {t.waterModalTitle}
+            </Text>
+            <Text style={[styles.modalDesc, { color: colors.textSecondary }]}>
+              {t.waterModalDesc}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setCareModalVisible(false)}
+              style={[
+                styles.modalCtaBtn,
+                {
+                  backgroundColor: profile.darkMode
+                    ? colors.mossPrimary
+                    : colors.mossDeep,
+                },
+              ]}
+            >
+              <Text style={styles.modalCtaText}>{t.waterModalBtn}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <ThemedModal
-        visible={modalInfo.visible}
-        title={modalInfo.title}
-        message={modalInfo.message}
-        tone={modalInfo.tone}
+        visible={artFeedback.visible}
+        title={artFeedback.title}
+        message={artFeedback.message}
+        tone={artFeedback.tone}
         isDark={profile.darkMode}
         confirmLabel="OK"
-        onConfirm={() => setModalInfo((p) => ({ ...p, visible: false }))}
+        onConfirm={() => setArtFeedback((p) => ({ ...p, visible: false }))}
       />
     </SafeAreaView>
   );
@@ -321,128 +417,180 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingVertical: 12,
   },
-  roundBtn: {
+  circleBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 19, fontWeight: '800' },
-  subtitle: { fontSize: 12, marginTop: 2 },
-  stageContainer: {
-    flex: 1,
-    marginHorizontal: 14,
-    marginBottom: 10,
-    borderRadius: 28,
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingBottom: 34,
+  },
+  artworkCard: {
+    height: 296,
+    borderRadius: 24,
     overflow: 'hidden',
+    borderWidth: 1,
+    marginBottom: 18,
     position: 'relative',
   },
-  blurredBackdrop: {
+  artworkBackdrop: {
     flex: 1,
     width: '100%',
     height: '100%',
   },
-  softVeil: {
+  artworkVeil: {
     flex: 1,
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    paddingBottom: 24,
-  },
-  heroPlantBox: {
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginBottom: -6,
-    zIndex: 2,
-  },
-  groundShadow: {
-    width: 150,
-    height: 16,
-    borderRadius: 50,
-    backgroundColor: 'rgba(20, 30, 24, 0.28)',
-    marginTop: -12,
-  },
-  cleanShelf: {
-    width: '84%',
-    height: 14,
-    borderRadius: 8,
-    backgroundColor: '#7A563B',
-    borderTopWidth: 2,
-    borderTopColor: '#9E7353',
-  },
-  navArrow: {
-    position: 'absolute',
-    top: '48%',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(250, 247, 240, 0.88)',
+    backgroundColor: 'rgba(246, 243, 236, 0.25)',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 10,
   },
-  navLeft: { left: 12 },
-  navRight: { right: 12 },
-  genArtPill: {
+  healthPill: {
     position: 'absolute',
     top: 14,
-    right: 14,
+    left: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(30, 53, 43, 0.82)',
-    paddingHorizontal: 13,
-    paddingVertical: 8,
-    borderRadius: 18,
-    zIndex: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
-  genArtText: {
-    color: '#FAF7F0',
+  healthPillText: {
     fontSize: 12,
     fontWeight: '700',
   },
-  bottomPanel: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    borderTopWidth: 1,
-    padding: 20,
-  },
-  reminderRow: { gap: 8, marginBottom: 14 },
-  infoPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-  },
-  infoPillText: { fontSize: 12.5, fontWeight: '600' },
-  hpHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  hpStatus: { fontSize: 15, fontWeight: '700' },
-  hpPercent: { fontSize: 16, fontWeight: '800' },
-  hpTrack: {
-    height: 10,
-    borderRadius: 5,
-    overflow: 'hidden',
-    marginBottom: 16,
-  },
-  hpFill: { height: '100%', borderRadius: 5 },
-  waterBtn: {
-    paddingVertical: 15,
-    borderRadius: 16,
-    flexDirection: 'row',
+  sideArrow: {
+    position: 'absolute',
+    top: '46%',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
   },
-  waterBtnText: { fontSize: 15.5, fontWeight: '700' },
+  sideLeft: { left: 12 },
+  sideRight: { right: 12 },
+  plantTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+  },
+  plantSub: {
+    fontSize: 13.5,
+    marginTop: 4,
+    marginBottom: 18,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 22,
+  },
+  metricCard: {
+    flex: 1,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 13,
+  },
+  metricTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 8,
+  },
+  metricLabel: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+  },
+  metricValue: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  sectionHeading: {
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  nextCareCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 18,
+  },
+  nextCareMain: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  nextCareSub: {
+    fontSize: 12.5,
+    marginTop: 4,
+  },
+  ctaBtn: {
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  ctaText: {
+    fontSize: 15.5,
+    fontWeight: '700',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(18, 28, 22, 0.52)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 26,
+  },
+  careModalCard: {
+    width: '100%',
+    borderRadius: 26,
+    borderWidth: 1,
+    padding: 26,
+    alignItems: 'center',
+  },
+  dropCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 21,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  modalDesc: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 21,
+    marginBottom: 22,
+  },
+  modalCtaBtn: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  modalCtaText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
 });

@@ -38,6 +38,8 @@ interface PlantStoreState {
   profile: GardenerProfile;
   plants: Plant[];
   xp: number;
+  streakDays: number;
+  lastCareDay?: string;
   chatHistory: ChatMessage[];
   speciesArtCache: Record<string, string>;
   seenTutorials: { home?: boolean; detail?: boolean; ai?: boolean };
@@ -54,16 +56,22 @@ interface PlantStoreState {
   resetGarden: () => void;
 }
 
+function getTodayKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export const usePlantStore = create<PlantStoreState>()(
   persist(
     (set, get) => ({
       profile: {
-        name: 'Jardineiro',
+        name: 'Rafa',
         darkMode: false,
         language: 'pt',
       },
       plants: [],
-      xp: 0,
+      xp: 40,
+      streakDays: 1,
+      lastCareDay: getTodayKey(),
       chatHistory: [],
       speciesArtCache: {},
       seenTutorials: {},
@@ -85,7 +93,7 @@ export const usePlantStore = create<PlantStoreState>()(
             ...p,
             id: `${Date.now()}-${idx}`,
             generatedArtUri: cachedArt,
-            hp: 85,
+            hp: idx === 1 ? 32 : 88,
             maxHp: 100,
             lastWateredAt: nowIso,
           };
@@ -114,16 +122,26 @@ export const usePlantStore = create<PlantStoreState>()(
 
       waterPlant: (id) => {
         const nowIso = new Date().toISOString();
-        const target = get().plants.find((p) => p.id === id);
+        const today = getTodayKey();
+        const stateBefore = get();
+        const target = stateBefore.plants.find((p) => p.id === id);
+
         if (target) {
           scheduleSpeciesWaterReminder(target.name, target.category);
         }
+
+        const nextStreak =
+          stateBefore.lastCareDay === today
+            ? Math.max(1, stateBefore.streakDays)
+            : stateBefore.streakDays + 1;
 
         set((state) => ({
           plants: state.plants.map((p) =>
             p.id === id ? { ...p, hp: p.maxHp, lastWateredAt: nowIso } : p
           ),
-          xp: state.xp + 10,
+          xp: state.xp + 20,
+          streakDays: nextStreak,
+          lastCareDay: today,
         }));
       },
 
@@ -131,7 +149,7 @@ export const usePlantStore = create<PlantStoreState>()(
         set((state) => ({
           plants: state.plants.map((p) => ({
             ...p,
-            hp: Math.max(0, p.hp - 20),
+            hp: Math.max(12, p.hp - 28),
           })),
         })),
 
@@ -148,15 +166,23 @@ export const usePlantStore = create<PlantStoreState>()(
       clearChatHistory: () => set({ chatHistory: [] }),
 
       exportBackupJson: () => {
-        const { profile, plants, xp, chatHistory, speciesArtCache } = get();
+        const {
+          profile,
+          plants,
+          xp,
+          streakDays,
+          chatHistory,
+          speciesArtCache,
+        } = get();
         return JSON.stringify(
           {
             app: 'BotanIA',
-            version: '10.0',
+            version: '11.0',
             exportedAt: new Date().toISOString(),
             profile,
             plants,
             xp,
+            streakDays,
             chatHistory,
             speciesArtCache,
           },
@@ -173,6 +199,8 @@ export const usePlantStore = create<PlantStoreState>()(
             profile: parsed.profile || get().profile,
             plants: parsed.plants,
             xp: typeof parsed.xp === 'number' ? parsed.xp : 0,
+            streakDays:
+              typeof parsed.streakDays === 'number' ? parsed.streakDays : 1,
             chatHistory: Array.isArray(parsed.chatHistory)
               ? parsed.chatHistory
               : [],
@@ -188,6 +216,7 @@ export const usePlantStore = create<PlantStoreState>()(
         set({
           plants: [],
           xp: 0,
+          streakDays: 1,
           chatHistory: [],
         }),
     }),
@@ -202,4 +231,3 @@ export const selectCurrentLevel = (state: PlantStoreState) =>
   Math.floor(state.xp / 100) + 1;
 
 export const selectXpProgress = (state: PlantStoreState) => state.xp % 100;
-
