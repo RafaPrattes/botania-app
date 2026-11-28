@@ -54,9 +54,7 @@ const COPY = {
     title: 'Garden Centers',
     subtitle: 'Lojas botânicas, floriculturas e insumos perto de você',
     filters: {
-      nearby: 'Perto de mim',
-      florist: 'Floriculturas',
-      supplies: 'Insumos',
+      nearby: 'Floriculturas perto de mim',
     },
     loading: 'Localizando espaços próximos...',
     emptyTitle: 'Nenhum espaço encontrado neste filtro',
@@ -578,8 +576,6 @@ export const GardenMapScreen: React.FC = () => {
 
   const filterOptions: { key: FilterKey; label: string }[] = [
     { key: 'nearby', label: copy.filters.nearby },
-    { key: 'florist', label: copy.filters.florist },
-    { key: 'supplies', label: copy.filters.supplies },
   ];
 
   return (
